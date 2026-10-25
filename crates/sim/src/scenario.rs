@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::army::Army;
-use crate::clock::{Clock, MINUTES_PER_DAY, Weather};
+use crate::clock::{Clock, Weather};
 use crate::fort::{Extra, Fort, FortKind};
 use crate::map::{Map, Road};
 use crate::rng::Rng;
@@ -120,7 +120,7 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
         forts,
         armies,
         // Day 14, late afternoon: a blood moon rises at dusk.
-        clock: Clock { minute: 14 * MINUTES_PER_DAY + 17 * 60 },
+        clock: Clock { minute: 17 * 60 },
         weather: Weather::Clear,
         wind: -1,
         log: VecDeque::new(),

@@ -1,4 +1,4 @@
-use bivouac_sim::clock::{LUNAR_CYCLE_DAYS, MINUTES_PER_DAY};
+use bivouac_sim::clock::{LUNAR_CYCLE_DAYS, MINUTES_PER_DAY, MOON_OFFSET_DAYS};
 use bivouac_sim::{Sim, Weather};
 use macroquad::prelude::Color;
 
@@ -60,7 +60,7 @@ pub struct Light {
     pub moon: Body,
     /// 0 at night, 1 in full day.
     pub day: f32,
-    /// Continuous lunar phase, 0..28 (14 = full).
+    /// Continuous lunar phase, 0..LUNAR_CYCLE_DAYS (half way = full).
     pub phase: f32,
     pub illum: f32,
     pub blood: bool,
@@ -78,7 +78,7 @@ impl Light {
     pub fn compute(sim: &Sim, minute: f32, fx: &WeatherFx) -> Light {
         let mod_ = minute.rem_euclid(MINUTES_PER_DAY as f32);
         let sun = Body::at(mod_, 360.0);
-        let phase = (minute / MINUTES_PER_DAY as f32).rem_euclid(LUNAR_CYCLE_DAYS as f32);
+        let phase = (minute / MINUTES_PER_DAY as f32 + MOON_OFFSET_DAYS as f32).rem_euclid(LUNAR_CYCLE_DAYS as f32);
         let moon_rise =
             (360.0 + phase * MINUTES_PER_DAY as f32 / LUNAR_CYCLE_DAYS as f32).rem_euclid(MINUTES_PER_DAY as f32);
         let moon = Body::at(mod_, moon_rise);

@@ -72,7 +72,7 @@ From top to bottom:
 ### Mockup 1 — dusk, sky expanded, blood moon (curved roads)
 
 ```
- BIVOUAC · Day 14, dusk · ● blood moon (full) · clear · wind W, light            ▶▶ ×2   ␣ pause
+ BIVOUAC · Day 1, dusk · ● blood moon (full) · clear · wind W, light            ▶▶ ×2   ␣ pause
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ sky [▾] ━━
         .               *                    ▄▄▄██████▄▄▄                   .               *
    *            .                        ▄▄██▓▓▓▓████▓▓▓▓██▄▄                         .
@@ -117,7 +117,7 @@ What's on the map: `⣿⣷` is your 1st Army at Greywall Keep. `⣦` is your 2nd
 ### Mockup 2 — 2am, sky collapsed, new moon, heavy rain
 
 ```
- BIVOUAC · Day 15, 02:00 · ○ new moon · heavy rain · lowland fog                 ▶ ×1    ␣ pause
+ BIVOUAC · Day 5, 02:00 · ○ new moon · heavy rain · lowland fog                 ▶ ×1    ␣ pause
  ╱ ╱  ╱ ╱ ╱  ╱  ╱ ╱ ╱  ╱ ╱  ╱ ╱ ╱  ╱ ╱  ╱ ╱  ╱ ╱ ╱  ╱ ╱ ╱  ╱  ╱ ╱  ╱ ╱ ╱  ╱ ╱  ╱ ╱  ╱ ╱ sky [▸]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ♣♣♣♣♣♣ · · · · · · ♣♣♣♣♣♣♣♣ · · · · ╭──────────────────╮ · · · ♣♣♣♣♣♣♣♣♣♣ · · · · · · · · · ·
@@ -246,11 +246,11 @@ The sky is drawn as big animated text art **[decided]**, and it affects gameplay
 
 | Condition | Effect |
 |---|---|
-| Moon phase | Night visibility: a new moon is darkest, so stealth is best; a full moon is brightest **[decided]** |
+| Moon phase | Night visibility: a new moon is darkest, so stealth is best; a full moon is brightest **[decided]**. The lunar cycle is 8 days, one phase a night, so it visibly changes **[built]** |
 | Cloud cover | Hides moon and starlight, so it's darker and helps stealth **[decided]** |
 | Rain | Slows **all** troops **[decided]**. Makes hidden units **easier to track** because of mud tracks **[decided]**. Keeps down the dust from big armies, so they're harder to see from afar by day **[proposed]** |
 | Fog | Cuts sight range sharply, mostly in lowlands and near rivers **[decided in concept]** |
-| Blood moon | An omen: hurts morale (maybe more for one side?). Mostly for looks at first **[proposed]** |
+| Blood moon | The full moon of every other cycle (every 16 days). An omen: hurts morale (maybe more for one side?). Mostly for looks at first **[proposed]** |
 | Comet, eclipse, etc. | Later: morale and event mechanics **[decided: later]** |
 
 ## 12. Visibility, detection and stealth
@@ -314,7 +314,7 @@ Opening a fort turns the bottom panel into a larger fort panel. The sky collapse
 ### Mockup 4 — Ashford Mill depot
 
 ```
- BIVOUAC · Day 14, 19:10 · ● blood moon · clear                                   ▶▶ ×2   ␣ pause
+ BIVOUAC · Day 1, 19:10 · ● blood moon · clear                                   ▶▶ ×2   ␣ pause
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   · · · ‾‾──___ · · ▛▀▀▜╯ · · · ░░░░ · · · · · ╲ ▛▀▀▀
   · · · · · · ‾‾───▌▒▒▐────────────⣾⣿─────────╰─▌▓▓▓
@@ -384,7 +384,7 @@ Built:
 - The map: generated valley (ridge, spurs, forests, winding river), 6 forts, 4 spline roads drawn as quantized curves, bridges.
 - Armies: braille density, columns stretching back along their trail, selection, path preview, march/rest/hold/divide/join, stamina, food, resupply in friendly forts, starvation.
 - Forts: stores, daily production from extras, garrison eating, capture by holding for 60 minutes.
-- Weather: clear/overcast/rain/fog as a Markov chain; rain slows movement and costs extra stamina; fog and rain overlays.
+- Weather: clear/overcast/rain/fog as a Markov chain rolled every 3 hours (rain about 7% of the time, a spell every ~3 days); rain slows movement and costs extra stamina; fog and rain overlays.
 - The HUD: status bar, minimap, hover / selected / log panel.
 - A deterministic sim with a checksum, plus tests for determinism, road connectivity, bridges, the forest cap, capture, and divide/join.
 - **Combat (v0.2)**, as in §13. The sim tests cover routs, a bigger army winning, big armies reaching a decision, garrisons having to be beaten first, deploying into line, and routed armies ignoring orders. `cargo test -p bivouac-sim battle_report -- --ignored --nocapture` prints battle-pacing numbers, and `cargo test -p bivouac-ai campaign_log -- --ignored --nocapture` prints a 4-day AI campaign.

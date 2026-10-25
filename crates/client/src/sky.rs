@@ -1,4 +1,5 @@
 use bivouac_sim::Sim;
+use bivouac_sim::clock::LUNAR_CYCLE_DAYS;
 use bivouac_sim::rng::hash2;
 use macroquad::prelude::*;
 
@@ -85,8 +86,9 @@ pub fn draw(g: &Grid, l: &Layout, light: &Light, sim: &Sim, t: f32) {
         let strength =
             if light.blood { 0.06 } else { 0.03 } * light.illum * (1.0 - light.cloud * 0.6) * (1.0 - light.day * 0.8);
         glow(g, cx, cy, radius, bright, strength);
-        let waxing = light.phase < 14.0;
-        let k = (std::f32::consts::TAU * light.phase / 28.0).cos();
+        let cycle = LUNAR_CYCLE_DAYS as f32;
+        let waxing = light.phase < cycle / 2.0;
+        let k = (std::f32::consts::TAU * light.phase / cycle).cos();
         disc(g, l, cx, cy, radius, scale(bright, 1.0 - light.day * 0.4), dark, |u, v| {
             let edge = (1.0 - v * v).max(0.0).sqrt();
             let along = if waxing { u } else { -u };

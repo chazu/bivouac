@@ -595,13 +595,14 @@ impl Sim {
         let misty_hours = !(9..21).contains(&hour);
         let roll = self.rng.range(0, 100);
         let next = match self.weather {
-            Clear if roll < 60 => Clear,
-            Clear if roll < 85 || !misty_hours => Cloudy,
+            // Tuned so rain falls about 7% of the time, a spell every three days or so.
+            Clear if roll < 72 => Clear,
+            Clear if roll < 90 || !misty_hours => Cloudy,
             Clear => Fog,
-            Cloudy if roll < 40 => Cloudy,
-            Cloudy if roll < 65 => Clear,
+            Cloudy if roll < 50 => Cloudy,
+            Cloudy if roll < 88 => Clear,
             Cloudy => Rain,
-            Rain if roll < 50 => Rain,
+            Rain if roll < 45 => Rain,
             Rain => Cloudy,
             Fog if roll < 40 && hour < 11 => Fog,
             Fog => Clear,

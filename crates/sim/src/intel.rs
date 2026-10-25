@@ -18,10 +18,9 @@ pub const TRACK_MINUTES: u32 = 6 * 60;
 pub const MUD_TRACK_MINUTES: u32 = 18 * 60;
 /// Morale an ambushed army loses on the spot, out of [`crate::army::MORALE_MAX`].
 pub const AMBUSH_SHOCK: u32 = 15_000;
-/// Moonlight in percent by lunar phase (0 = new, 14 = full). A table rather than
+/// Moonlight in percent by lunar phase (0 = new, 4 = full). A table rather than
 /// `cos()` so every platform computes exactly the same thing.
-const MOONLIGHT: [i32; 28] =
-    [0, 1, 5, 11, 19, 28, 39, 50, 61, 72, 81, 89, 95, 99, 100, 99, 95, 89, 81, 72, 61, 50, 39, 28, 19, 11, 5, 1];
+const MOONLIGHT: [i32; crate::clock::LUNAR_CYCLE_DAYS as usize] = [0, 15, 50, 85, 100, 85, 50, 15];
 
 /// How well a side knows an enemy army, worst to best.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

@@ -1,4 +1,4 @@
-use bivouac_sim::clock::{hhmm, moon_phase_name};
+use bivouac_sim::clock::{FULL_MOON, hhmm, moon_phase_name};
 use bivouac_sim::path::FOREST_CAP;
 use bivouac_sim::{Army, ArmyState, Cell, Fort, MAP_W, Seen, Side, Sim, Terrain};
 use macroquad::prelude::*;
@@ -196,9 +196,9 @@ fn status_bar(g: &Grid, l: &Layout, app: &App, sim: &Sim, light: &Light) {
         format!("● blood moon ({})", moon_phase_name(phase).trim_end_matches(" moon"))
     } else {
         let glyph = match phase {
-            0 | 27 => '○',
-            1..=13 => '◑',
-            14 => '●',
+            0 => '○',
+            p if p < FULL_MOON => '◑',
+            FULL_MOON => '●',
             _ => '◐',
         };
         format!("{glyph} {}", moon_phase_name(phase))
@@ -224,7 +224,7 @@ fn status_bar(g: &Grid, l: &Layout, app: &App, sim: &Sim, light: &Light) {
     c += g.text(c, 0, "BIVOUAC", HEADING);
     let rest = format!(
         "  ·  Day {}, {} {}  ·  {}  ·  {}  ·  {}  ·  sight {}",
-        clock.day(),
+        clock.day() + 1,
         hhmm(clock.minute),
         when,
         moon,
