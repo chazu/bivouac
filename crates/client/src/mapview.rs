@@ -259,20 +259,46 @@ fn draw_armies(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Lig
         } else {
             (0.0, false)
         };
-        // On a road the column rides the road line itself, curving with it.
-        let column: Vec<(Cell, u32, f32)> = a
+        // On a road the column rides the road line itself, curving with it: its
+        // companies are dots strung along the line rather than braille in a cell.
+        let column: Vec<(Cell, u32, Option<Span>)> = a
             .column()
             .into_iter()
-            .map(|(c, n)| (c, n, sim.map.road_line_y(c.0, c.1).map_or(c.1 as f32, |ly| ly - 0.5)))
+            .map(|(c, n)| {
+                let span = sim.map.road_span(c.0, c.1).map(|((x0, y0), (x1, y1))| {
+                    let at = |x: f32, y: f32| vec2(v.px(0) + x * g.cw + shake, v.py(y));
+                    (at(x0, y0), at(x1, y1))
+                });
+                (c, n, span)
+            })
             .collect();
-        for &((x, _), n, fy) in &column {
-            let (px, py) = (v.px(x) + shake, v.py(fy));
-            // A dark backing keeps the dots legible over forts, roads and forest.
-            if !routing {
-                draw_rectangle(px, py, g.cw, g.ch, Color::new(0.02, 0.02, 0.03, 0.75));
-                draw_rectangle(px, py, g.cw, g.ch, alpha(palette::side(a.side), 0.14));
+        // Backings first, so no cell's backing covers its neighbour's dots.
+        if !routing {
+            let tint = alpha(palette::side(a.side), 0.14);
+            for &((x, y), _, span) in &column {
+                match span {
+                    // An opaque band, so overlaps at the joins don't show.
+                    Some((p0, p1)) => {
+                        let band = mix(Color::new(0.03, 0.03, 0.04, 1.0), palette::side(a.side), 0.12);
+                        let pad = (p1 - p0).normalize_or_zero() * g.cw * 0.1;
+                        let (a0, a1) = (p0 - pad, p1 + pad);
+                        draw_line(a0.x, a0.y, a1.x, a1.y, g.ch * 0.5, band);
+                    }
+                    // A dark backing keeps the dots legible over forts, roads and forest.
+                    None => {
+                        let (px, py) = (v.px(x) + shake, v.py(y as f32));
+                        draw_rectangle(px, py, g.cw, g.ch, Color::new(0.02, 0.02, 0.03, 0.75));
+                        draw_rectangle(px, py, g.cw, g.ch, tint);
+                    }
+                }
             }
-            g.put_px(px, py, braille_char(DENSITY[(n - 1) as usize]), color);
+        }
+        for &((x, y), n, span) in &column {
+            let (px, py) = (v.px(x) + shake, v.py(y as f32));
+            match span {
+                Some((p0, p1)) => dots_along(g, p0, p1, n, color),
+                None => g.put_px(px, py, braille_char(DENSITY[(n - 1) as usize]), color),
+            }
             if a.entrench > 150 {
                 // Earthworks thrown up in front of a dug-in army.
                 let w = g.cw * (0.3 + 0.7 * a.entrench as f32 / 1000.0);
@@ -287,8 +313,17 @@ fn draw_armies(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Lig
         }
         if selected == Some(a.id) {
             let pulse = 0.5 + 0.4 * (t * 4.0).sin();
-            for &((x, _), _, fy) in &column {
-                draw_rectangle_lines(v.px(x), v.py(fy), g.cw, g.ch, 1.5, Color::new(1.0, 1.0, 1.0, pulse));
+            let white = Color::new(1.0, 1.0, 1.0, pulse);
+            for &((x, y), _, span) in &column {
+                match span {
+                    // Brackets above and below the stretch of road.
+                    Some((p0, p1)) => {
+                        let h = g.ch * 0.42;
+                        draw_line(p0.x, p0.y - h, p1.x, p1.y - h, 1.5, white);
+                        draw_line(p0.x, p0.y + h, p1.x, p1.y + h, 1.5, white);
+                    }
+                    None => draw_rectangle_lines(v.px(x), v.py(y as f32), g.cw, g.ch, 1.5, white),
+                }
             }
             let mark = alpha(palette::side(a.side), 0.6);
             let on_ground = |(x, y): Cell| v.py(sim.map.road_line_y(x, y).unwrap_or(y as f32 + 0.5));
@@ -310,6 +345,28 @@ fn draw_armies(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Lig
                 }
             }
         }
+    }
+}
+
+/// A stretch of road line across one cell, in screen pixels.
+type Span = (Vec2, Vec2);
+
+/// `n` companies as dots in single file along a stretch of road, two files abreast
+/// when crowded, sized to match braille dots.
+fn dots_along(g: &Grid, p0: Vec2, p1: Vec2, n: u32, color: Color) {
+    let files = if n <= 4 { 1 } else { 2 };
+    let per = n.div_ceil(files);
+    let along = p1 - p0;
+    let side = vec2(-along.y, along.x).normalize_or(vec2(0.0, 1.0)) * g.ch * 0.13;
+    let r = (g.cw * 0.17).max(1.3);
+    let mut left = n;
+    for f in 0..files {
+        let offset = side * (f as f32 * 2.0 - (files - 1) as f32);
+        for i in 0..per.min(left) {
+            let p = p0 + along * ((i as f32 + 0.5) / per as f32) + offset;
+            draw_circle(p.x, p.y, r, color);
+        }
+        left = left.saturating_sub(per);
     }
 }
 

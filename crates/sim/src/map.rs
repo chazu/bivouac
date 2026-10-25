@@ -115,6 +115,26 @@ impl Map {
         Some(mid.clamp(y as f32, y as f32 + 1.0))
     }
 
+    /// The stretch of road line inside cell (x, y), as two points in cell units,
+    /// left to right: where troops on the road should stand.
+    pub fn road_span(&self, x: i32, y: i32) -> Option<((f32, f32), (f32, f32))> {
+        let road = self.roads.iter().find(|r| r.rows_in_column(x).contains(&y))?;
+        let (a, b) = (road.edge_y(x), road.edge_y(x + 1));
+        let (top, bottom) = (y as f32, y as f32 + 1.0);
+        // Clip the line y = a + (b - a) t to this row; a steep road crosses several.
+        let (mut t0, mut t1) = (0.0f32, 1.0f32);
+        if (b - a).abs() > f32::EPSILON {
+            let (ta, tb) = ((top - a) / (b - a), (bottom - a) / (b - a));
+            t0 = ta.min(tb).max(0.0);
+            t1 = ta.max(tb).min(1.0);
+            if t1 <= t0 {
+                (t0, t1) = (0.0, 1.0);
+            }
+        }
+        let at = |t: f32| (x as f32 + t, (a + (b - a) * t).clamp(top, bottom));
+        Some((at(t0), at(t1)))
+    }
+
     /// The road cell under a point (in cell units) lying within `slack` rows of a
     /// road line. Lines run along cell edges, so a click on one is ambiguous.
     pub fn road_near(&self, fx: f32, fy: f32, slack: f32) -> Option<Cell> {
