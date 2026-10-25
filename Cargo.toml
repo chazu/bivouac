@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/sim", "crates/ai", "crates/client"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+bivouac-sim = { path = "crates/sim" }
+bivouac-ai = { path = "crates/ai" }
+macroquad = { version = "0.4.16", default-features = false }
+
+# Build-size hygiene: keep debug info small, and optimize (but don't debug-annotate)
+# dependencies so the game runs smoothly in dev builds without bloating target/.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

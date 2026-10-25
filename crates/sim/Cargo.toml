@@ -1,0 +1,6 @@
+[package]
+name = "bivouac-sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

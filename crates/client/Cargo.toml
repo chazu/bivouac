@@ -1,0 +1,13 @@
+[package]
+name = "bivouac-client"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bivouac"
+path = "src/main.rs"
+
+[dependencies]
+bivouac-sim.workspace = true
+bivouac-ai.workspace = true
+macroquad.workspace = true

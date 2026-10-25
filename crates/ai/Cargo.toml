@@ -1,0 +1,7 @@
+[package]
+name = "bivouac-ai"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bivouac-sim.workspace = true
