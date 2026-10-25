@@ -62,12 +62,19 @@ pub struct Fort {
     pub stores: [u32; 3],
     pub extras: Vec<Extra>,
     pub garrison: u32,
+    pub garrison_morale: u32,
+    pub(crate) garrison_bleed: u32,
     pub(crate) capture: Option<(Side, u32)>,
 }
 
 impl Fort {
     pub fn contains(&self, (x, y): Cell) -> bool {
         (x - self.pos.0).abs() <= 2 && (y - self.pos.1).abs() <= 1
+    }
+
+    /// Inside the walls or right up against them: where the garrison can fight.
+    pub fn within_reach(&self, (x, y): Cell) -> bool {
+        (x - self.pos.0).abs() <= 3 && (y - self.pos.1).abs() <= 2
     }
 
     /// Who is taking the fort and how many minutes they've held it.
@@ -92,8 +99,11 @@ impl Fort {
 
     pub fn daily_production(&self) -> [u32; 3] {
         let mut p = [0; 3];
-        if self.kind == FortKind::Village {
-            p[GRAIN] += 60;
+        match self.kind {
+            // A capital draws on the whole province behind it.
+            FortKind::Main => p[GRAIN] += 2500,
+            FortKind::Village => p[GRAIN] += 60,
+            _ => {}
         }
         for e in &self.extras {
             match *e {

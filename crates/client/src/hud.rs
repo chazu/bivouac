@@ -1,6 +1,6 @@
 use bivouac_sim::clock::{hhmm, moon_phase_name};
 use bivouac_sim::path::FOREST_CAP;
-use bivouac_sim::{Army, ArmyState, Cell, Fort, MAP_W, Side, Sim, Terrain};
+use bivouac_sim::{Army, ArmyState, Cell, Fort, MAP_W, Seen, Side, Sim, Terrain};
 use macroquad::prelude::*;
 
 use crate::app::{App, Layout, Selection};
@@ -12,6 +12,99 @@ pub fn draw(g: &Grid, l: &Layout, app: &App, sim: &Sim, light: &Light) {
     status_bar(g, l, app, sim, light);
     minimap(g, l, app, sim);
     panel(g, l, app, sim);
+    if app.intro {
+        intro(g, l, app);
+    } else if app.help {
+        help(g, l);
+    } else if let Some(winner) = sim.winner {
+        let (title, line) = if winner == app.player {
+            ("VICTORY", format!("{} has fallen to you.", main_fort_of(sim, winner.other())))
+        } else {
+            ("DEFEAT", format!("{} has fallen.", main_fort_of(sim, app.player)))
+        };
+        boxed(
+            g,
+            l,
+            palette::side(winner),
+            &[(title, palette::side(winner)), ("", TEXT), (&line, TEXT), ("[N] new game", DIM)],
+        );
+    }
+}
+
+fn main_fort_of(sim: &Sim, side: Side) -> &'static str {
+    let original = if side == Side::West { 0 } else { sim.forts.len() - 1 };
+    sim.forts[original].name
+}
+
+/// A centered box of text over the map.
+fn boxed(g: &Grid, l: &Layout, edge: Color, lines: &[(&str, Color)]) {
+    let width = lines.iter().map(|(s, _)| s.chars().count() as i32).max().unwrap_or(0) + 8;
+    let height = lines.len() as i32 + 2;
+    let col = (l.cols - width) / 2;
+    let row = (l.map_top + bivouac_sim::MAP_H / 2 - height / 2).max(1);
+    g.fill(col, row, width, height, Color::new(0.03, 0.03, 0.04, 0.94));
+    let (x, y) = (col as f32 * g.cw, row as f32 * g.ch);
+    draw_rectangle_lines(x, y, width as f32 * g.cw, height as f32 * g.ch, 2.0, edge);
+    for (i, &(text, color)) in lines.iter().enumerate() {
+        g.text(col + 4, row + 1 + i as i32, text, color);
+    }
+}
+
+fn intro(g: &Grid, l: &Layout, app: &App) {
+    let you = app.player.faction();
+    let them = app.player.other().faction();
+    let us = format!("You command {you}, holding Lantern Gate in the west.");
+    let foe = format!("{} marches from the Cinnabar Citadel in the east.", capitalize(them));
+    boxed(
+        g,
+        l,
+        palette::side(app.player),
+        &[
+            ("BIVOUAC", HEADING),
+            ("", TEXT),
+            ("The sun is dying. The roads still matter.", DIM),
+            ("", TEXT),
+            (&us, TEXT),
+            (&foe, TEXT),
+            ("Take the Citadel, or hold your gate until they break.", TEXT),
+            ("", TEXT),
+            ("Armies standing still deploy into line and dig in.", DIM),
+            ("Your scouts only see so far: dust, campfires and tracks give enemies away.", DIM),
+            ("Forests hide small parties. Night, fog and rain shorten everyone's sight.", DIM),
+            ("", TEXT),
+            ("[F1] controls     [Space] begin", HEADING),
+        ],
+    );
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+fn help(g: &Grid, l: &Layout) {
+    boxed(
+        g,
+        l,
+        HEADING,
+        &[
+            ("CONTROLS", HEADING),
+            ("", TEXT),
+            ("left-click       select an army or fort (click again to cycle)", TEXT),
+            ("right-click      march there, or attack an enemy you can see", TEXT),
+            ("  +shift         add a waypoint, to steer along a road", TEXT),
+            ("R / H            rest / halt in line of battle", TEXT),
+            ("Q                cycle stance: aggressive, defensive, evasive", TEXT),
+            ("D / J            divide in half / join armies in the same cell", TEXT),
+            ("G                put the army into the garrison of your fort", TEXT),
+            ("M                (fort selected) muster 400 men from its garrison", TEXT),
+            ("Tab / C          next army / center on it", TEXT),
+            ("← → / wheel      scroll; click the minimap to jump", TEXT),
+            ("S                collapse or expand the sky", TEXT),
+            ("Space / 1-4      pause / speed ×1 ×2 ×4 ×8", TEXT),
+            ("F1 or ?          this help", TEXT),
+        ],
+    );
 }
 
 /// Writes lines down a column, clipping to its width and height.
@@ -130,13 +223,14 @@ fn status_bar(g: &Grid, l: &Layout, app: &App, sim: &Sim, light: &Light) {
     let mut c = 1;
     c += g.text(c, 0, "BIVOUAC", HEADING);
     let rest = format!(
-        "  ·  Day {}, {} {}  ·  {}  ·  {}  ·  {}",
+        "  ·  Day {}, {} {}  ·  {}  ·  {}  ·  {}  ·  sight {}",
         clock.day(),
         hhmm(clock.minute),
         when,
         moon,
         sim.weather.label(),
-        wind
+        wind,
+        sim.sight()
     );
     let color = if clock.is_blood_moon() && light.red > 0.1 { rgb(1.0, 0.55, 0.5) } else { TEXT };
     g.text_clip(c, 0, &rest, right_col - c - 2, color);
@@ -153,8 +247,19 @@ fn minimap(g: &Grid, l: &Layout, app: &App, sim: &Sim) {
     for f in &sim.forts {
         g.put(col_of(f.pos.0), top, '■', palette::side_or_stone(f.owner));
     }
-    for a in &sim.armies {
+    for a in sim.armies.iter().filter(|a| a.side == app.player || app.reveal) {
         g.put(col_of(a.pos.0), top, '•', palette::side(a.side));
+    }
+    if !app.reveal {
+        let enemy = palette::side(app.player.other());
+        for r in &sim.intel(app.player).reports {
+            let (glyph, a) = match r.seen {
+                Seen::Remembered => ('·', 0.5),
+                Seen::Rumored => ('?', 0.7),
+                _ => ('•', 1.0),
+            };
+            g.put(col_of(r.cell.0), top, glyph, palette::alpha(enemy, a));
+        }
     }
     g.put(x0 - 1, top, '◄', DIM);
     g.put(x0 + w, top, '►', DIM);
@@ -203,7 +308,7 @@ fn panel(g: &Grid, l: &Layout, app: &App, sim: &Sim) {
     selected_column(&mut sel, app, sim);
 
     log.line("LOG", HEADING);
-    for e in &sim.log {
+    for e in sim.log.iter().filter(|e| e.visible_to(app.player) || app.reveal) {
         let color = match e.side {
             Some(s) if s == app.player => TEXT,
             Some(_) => rgb(1.0, 0.6, 0.55),
@@ -236,29 +341,57 @@ fn terrain_words(sim: &Sim, (x, y): Cell) -> String {
     }
 }
 
-fn army_lines(pen: &mut Pen, a: &Army, player: Side) {
+/// What the player can tell about an army's strength.
+fn strength(a: &Army, app: &App, sim: &Sim) -> String {
+    match app.seen(sim, a) {
+        Some(Seen::Identified) => format!("{} men", a.men),
+        _ => format!("about {} men", sim.intel(app.player).report(a.id).map_or(a.men, |r| r.men)),
+    }
+}
+
+fn army_lines(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
     let glyph = braille_char(DENSITY[(a.companies().min(8) - 1) as usize]).to_string();
-    let who = if a.side == player { "yours" } else { "enemy" };
+    let who = if a.side == app.player { "yours" } else { "enemy" };
     pen.segs(&[
         (&glyph, palette::side(a.side)),
         (&format!(" {} ({who})", a.name), TEXT),
-        (&format!("  {} men", a.men), DIM),
+        (&format!("  {}", strength(a, app, sim)), DIM),
     ]);
+    if app.seen(sim, a) != Some(Seen::Identified) {
+        pen.line("  sighted at a distance; get closer to learn more", DIM);
+        return;
+    }
+    pen.segs(&[
+        ("  stamina ", DIM),
+        (&bar(a.stamina as f32 / 1000.0, 6), stamina_color(a)),
+        (&format!(" {:>3}%  ", a.stamina / 10), TEXT),
+        ("morale ", DIM),
+        (&bar(a.morale_pct() as f32 / 100.0, 6), morale_color(a)),
+        (&format!(" {:>3}%", a.morale_pct()), TEXT),
+    ]);
+    pen.segs(&[("  ", DIM), (&status_words(a), state_color(a)), (&format!("  ·  food {:.1} d", a.food_days()), DIM)]);
+}
+
+fn status_words(a: &Army) -> String {
     let state = match a.state {
         ArmyState::Marching => "marching",
         ArmyState::Resting => "resting",
         ArmyState::Holding => "holding",
+        ArmyState::Routing => return format!("ROUTING · rallies in {}", duration(a.rout_left)),
     };
-    pen.segs(&[
-        ("  stamina ", DIM),
-        (&bar(a.stamina as f32 / 1000.0, 8), stamina_color(a)),
-        (&format!(" {:>3}%  {state}", a.stamina / 10), TEXT),
-    ]);
-    pen.segs(&[
-        ("  food    ", DIM),
-        (&bar(a.food_days() / 5.0, 8), if a.food_days() < 1.0 { AMBER } else { TEXT }),
-        (&format!(" {:.1} days", a.food_days()), TEXT),
-    ]);
+    let formation = if a.deployed() { "in line" } else { "in column" };
+    format!("{state} {formation} · {}", a.stance.label())
+}
+
+fn state_color(a: &Army) -> Color {
+    if a.routing() { AMBER } else { TEXT }
+}
+
+fn morale_color(a: &Army) -> Color {
+    match a.morale_pct() {
+        0..=30 => AMBER,
+        _ => rgb(0.75, 0.7, 0.95),
+    }
 }
 
 fn stamina_color(a: &Army) -> Color {
@@ -278,10 +411,24 @@ fn hover_column(pen: &mut Pen, app: &App, sim: &Sim) {
             (&format!(" · {} · {}", f.kind.label(), side_name(f.owner, app.player)), DIM),
         ]);
     }
-    let here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c)).collect();
+    if !app.watching(sim, c) {
+        pen.line("beyond your sight", DIM);
+    }
+    let here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c) && app.in_view(sim, a)).collect();
     for a in here.iter().take(3) {
         pen.gap();
-        army_lines(pen, a, app.player);
+        army_lines(pen, a, app, sim);
+    }
+    if !app.reveal {
+        for r in sim.intel(app.player).reports.iter().filter(|r| r.cell == c && r.seen < Seen::Sighted) {
+            pen.gap();
+            let ago = duration(sim.clock.minute - r.minute);
+            let what = match r.seen {
+                Seen::Rumored => format!("? Dust or fires: a host of perhaps {} men", r.men),
+                _ => format!("? Enemy last seen here {ago} ago, about {} men", r.men),
+            };
+            pen.line(&what, palette::side(app.player.other()));
+        }
     }
     if here.len() > 3 {
         pen.line(&format!("  …and {} more", here.len() - 3), DIM);
@@ -297,13 +444,13 @@ fn selected_column(pen: &mut Pen, app: &App, sim: &Sim) {
         }
         Some(Selection::Fort(id)) => {
             if let Some(f) = sim.forts.iter().find(|f| f.id == id) {
-                fort_detail(pen, f, app);
+                fort_detail(pen, f, app, sim);
             }
         }
         None => {
             pen.line("SELECTED", HEADING);
             pen.line("Click an army or fort to select it.", DIM);
-            pen.line("Right-click the map to march there.", DIM);
+            pen.line("Right-click to march (shift: waypoint), or on an enemy to attack.", DIM);
             pen.gap();
             pen.line("[R]est  [H]old  [D]ivide  [J]oin", DIM);
             pen.line("[1-4] speed  [Space] pause", DIM);
@@ -313,6 +460,11 @@ fn selected_column(pen: &mut Pen, app: &App, sim: &Sim) {
 
 fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
     pen.segs(&[("SELECTED  ", HEADING), (&a.name, palette::side(a.side))]);
+    if app.seen(sim, a) != Some(Seen::Identified) {
+        pen.segs(&[("men      ", DIM), (&strength(a, app, sim), TEXT)]);
+        pen.line("Sighted at a distance. Get closer to learn more.", DIM);
+        return;
+    }
     pen.segs(&[("men      ", DIM), (&format!("{}  ({} companies)", a.men, a.companies()), TEXT)]);
     pen.segs(&[
         ("stamina  ", DIM),
@@ -325,7 +477,21 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
         (&bar(a.food_days() / 5.0, 10), if a.food_days() < 1.0 { AMBER } else { TEXT }),
         (&format!(" {:.1} d  ({per_day})", a.food_days()), TEXT),
     ]);
+    pen.segs(&[
+        ("morale   ", DIM),
+        (&bar(a.morale_pct() as f32 / 100.0, 10), morale_color(a)),
+        (&format!(" {}%", a.morale_pct()), TEXT),
+        (&if a.entrench > 0 { format!("   dug in {}%", a.entrench / 10) } else { String::new() }, DIM),
+    ]);
+    pen.segs(&[("status   ", DIM), (&status_words(a), state_color(a))]);
+    let target = a.target.and_then(|t| sim.army(t));
     let order = match (a.state, a.path.back()) {
+        (ArmyState::Routing, _) => "fleeing".into(),
+        _ if target.is_some() => {
+            let t = target.unwrap();
+            let fighting = if sim.in_battle(a.id) { "fighting" } else { "closing on" };
+            format!("attack → {fighting} {}", t.name)
+        }
         (ArmyState::Marching, Some(&dest)) => {
             let place = sim.fort_at(dest).map_or_else(|| format!("({}, {})", dest.0, dest.1), |f| f.name.to_string());
             format!("march → {place}  ·  ETA {}", duration(sim.eta_minutes(a)))
@@ -337,20 +503,42 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
     if a.starving {
         pen.line("STARVING: stamina is draining", AMBER);
     }
-    pen.gap();
     if a.side == app.player {
-        pen.line("[RMB] march  [R]est  [H]old  [D]ivide  [J]oin", DIM);
+        let exposure = match sim.knows(a.side.other(), a.id) {
+            Some(Seen::Identified) => ("identified by the enemy", AMBER),
+            Some(Seen::Sighted) => ("sighted by the enemy", AMBER),
+            Some(Seen::Rumored) => ("rumored: the enemy sees dust or fires", TEXT),
+            _ => ("unseen by the enemy", rgb(0.55, 0.85, 0.55)),
+        };
+        pen.segs(&[("exposure ", DIM), exposure]);
+        pen.line("[RMB] march / attack  [R]est [H]old [Q] stance", DIM);
+        pen.line("[D]ivide [J]oin [G]arrison", DIM);
     } else {
         pen.line("Enemy army: you can't command it.", DIM);
     }
 }
 
-fn fort_detail(pen: &mut Pen, f: &Fort, app: &App) {
+fn fort_detail(pen: &mut Pen, f: &Fort, app: &App, sim: &Sim) {
+    let known = f.owner == Some(app.player) || app.watching(sim, f.pos);
+    if !known {
+        pen.segs(&[("SELECTED  ", HEADING), (f.name, palette::side_or_stone(f.owner))]);
+        pen.segs(&[(&format!("{} · {}", f.kind.label(), side_name(f.owner, app.player)), DIM)]);
+        pen.line("Beyond your sight: garrison and stores unknown.", DIM);
+        return;
+    }
     pen.segs(&[("SELECTED  ", HEADING), (f.name, palette::side_or_stone(f.owner))]);
     pen.segs(&[
         (&format!("{} · {}", f.kind.label(), side_name(f.owner, app.player)), DIM),
         (&format!("  · garrison {}", f.garrison), DIM),
     ]);
+    if f.garrison > 0 {
+        let pct = f.garrison_morale / 1000;
+        pen.segs(&[
+            ("morale   ", DIM),
+            (&bar(pct as f32 / 100.0, 10), rgb(0.75, 0.7, 0.95)),
+            (&format!(" {pct}%"), TEXT),
+        ]);
+    }
     let names = bivouac_sim::fort::GOODS;
     let stores: Vec<String> = names.iter().zip(f.stores).map(|(n, s)| format!("{n} {s}")).collect();
     pen.segs(&[("stores   ", DIM), (&stores.join("  "), TEXT)]);
@@ -371,5 +559,8 @@ fn fort_detail(pen: &mut Pen, f: &Fort, app: &App) {
     }
     if let Some((s, n)) = f.capture_progress() {
         pen.line(&format!("Being taken by {}: {n}/60 min", side_name(Some(s), app.player)), AMBER);
+    }
+    if f.owner == Some(app.player) {
+        pen.line(&format!("[M] muster {} men from the garrison", crate::app::MUSTER_MEN.min(f.garrison)), DIM);
     }
 }

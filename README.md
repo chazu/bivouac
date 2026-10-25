@@ -17,9 +17,9 @@ make clippy     # lint
 
 Every `make` target runs `scripts/trim-target.sh` afterwards. It deletes stale incremental caches, and it wipes `target/` once it grows past `TARGET_CAP_MB` (default 3000).
 
-**Controls:** left-click selects an army or fort (click again to cycle). Right-click marches the selected army. `R`est, `H`old, `D`ivide, `J`oin. `Tab` next army, `C` center on it. `←/→` or the mouse wheel scroll, and clicking the minimap jumps there. `S` collapses or expands the sky. `Space` pauses, `1–4` sets speed ×1/×2/×4/×8.
+**Controls:** left-click selects an army or fort (click again to cycle). Right-click marches the selected army, or attacks if you click an enemy; shift+right-click adds a waypoint. Clicking near a road picks the road, and marching armies string out in column along it. `R`est, `H`old (halt and deploy into line of battle), `D`ivide, `J`oin, `G`arrison (inside your own fort), `Q` cycles stance (aggressive / defensive / evasive), and `M` (with your fort selected) musters 400 men from its garrison. `F1` or `?` shows all the controls. After a win or loss, `N` starts a new game. `Tab` next army, `C` center on it. `←/→` or the mouse wheel scroll, and clicking the minimap jumps there. `S` collapses or expands the sky. `Space` pauses, `1–4` sets speed ×1/×2/×4/×8.
 
-**Development flags:** `bivouac --screenshot out.png [--advance MINUTES] [--weather clear|cloudy|rain|fog] [--scroll X] [--select ID] [--collapse-sky]` renders a frame, saves it and exits.
+**Development flags:** `bivouac --screenshot out.png [--advance MINUTES] [--weather clear|cloudy|rain|fog] [--scroll X] [--select ID] [--collapse-sky] [--overlay intro|help]` renders a frame, saves it and exits. `--seed N` replays a map, and `--reveal` lifts the fog of war.
 
 ## Layout
 

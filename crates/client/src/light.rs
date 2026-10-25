@@ -102,6 +102,8 @@ impl Light {
         let night = 1.0 - self.day;
         let k = self.level * (0.75 + 0.25 * depth);
         let mut out = Color { r: c.r * k, g: c.g * k, b: c.b * k, a: c.a };
+        // Old amber daylight.
+        out = mix(out, Color { r: out.r * 1.08, g: out.g * 0.96, b: out.b * 0.82, a: c.a }, self.day);
         out = mix(out, Color { r: out.r * 0.6, g: out.g * 0.8, b: out.b * 1.25 + 0.02, a: c.a }, night * 0.6);
         out = mix(out, Color { r: out.r * 1.4 + 0.05, g: out.g * 0.6, b: out.b * 0.55, a: c.a }, self.red * 0.5);
         let grey = (out.r + out.g + out.b) / 3.0;
@@ -115,9 +117,10 @@ impl Light {
     }
 
     pub fn sky(&self, v: f32) -> Color {
-        let day = mix(rgb(0.32, 0.52, 0.82), rgb(0.64, 0.77, 0.90), v);
-        let night = mix(rgb(0.01, 0.01, 0.04), rgb(0.05, 0.04, 0.10), v);
-        let dusk = mix(rgb(0.16, 0.10, 0.28), rgb(0.95, 0.45, 0.22), v * v);
+        // A dying sun: dusty slate overhead, amber haze at the horizon, no blue skies.
+        let day = mix(rgb(0.30, 0.32, 0.42), rgb(0.82, 0.60, 0.40), v);
+        let night = mix(rgb(0.01, 0.01, 0.035), rgb(0.06, 0.035, 0.08), v);
+        let dusk = mix(rgb(0.15, 0.07, 0.20), rgb(0.88, 0.30, 0.12), v * v);
         let twilight = (1.0 - self.sun.alt.abs() / 0.28).clamp(0.0, 1.0);
         let mut c = mix(mix(night, day, self.day), dusk, twilight * 0.85);
         c = mix(c, mix(rgb(0.07, 0.0, 0.01), rgb(0.30, 0.02, 0.03), v), self.red * 0.8);

@@ -107,6 +107,34 @@ impl Map {
         }
     }
 
+    /// Height of the road line through cell (x, y) at the column's center, kept
+    /// within the cell: where to draw anything that travels on the road.
+    pub fn road_line_y(&self, x: i32, y: i32) -> Option<f32> {
+        let road = self.roads.iter().find(|r| r.rows_in_column(x).contains(&y))?;
+        let mid = (road.edge_y(x) + road.edge_y(x + 1)) / 2.0;
+        Some(mid.clamp(y as f32, y as f32 + 1.0))
+    }
+
+    /// The road cell under a point (in cell units) lying within `slack` rows of a
+    /// road line. Lines run along cell edges, so a click on one is ambiguous.
+    pub fn road_near(&self, fx: f32, fy: f32, slack: f32) -> Option<Cell> {
+        let x = fx.floor() as i32;
+        let t = fx - x as f32;
+        self.roads.iter().find_map(|r| {
+            let (x0, x1) = r.x_range();
+            if x < x0 || x >= x1 {
+                return None;
+            }
+            let ly = r.edge_y(x) * (1.0 - t) + r.edge_y(x + 1) * t;
+            if (fy - ly).abs() > slack {
+                return None;
+            }
+            let rows = r.rows_in_column(x);
+            let y = (ly.floor() as i32).clamp(*rows.start(), *rows.end());
+            Some((x, y))
+        })
+    }
+
     /// Topmost road cell in column `x` of road `road`, for placing units on it.
     pub fn road_cell(&self, road: usize, x: i32) -> Cell {
         (x, *self.roads[road].rows_in_column(x).start())

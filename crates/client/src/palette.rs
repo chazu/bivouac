@@ -6,8 +6,10 @@ pub const fn rgb(r: f32, g: f32, b: f32) -> Color {
     Color { r, g, b, a: 1.0 }
 }
 
-pub const WEST: Color = rgb(0.40, 0.68, 1.00);
-pub const EAST: Color = rgb(1.00, 0.33, 0.27);
+/// The Azure Remnant.
+pub const WEST: Color = rgb(0.36, 0.72, 0.96);
+/// The Vermilion Host.
+pub const EAST: Color = rgb(0.97, 0.34, 0.22);
 pub const STONE: Color = rgb(0.62, 0.60, 0.55);
 pub const TEXT: Color = rgb(0.86, 0.84, 0.78);
 pub const DIM: Color = rgb(0.52, 0.51, 0.48);

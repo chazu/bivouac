@@ -13,7 +13,6 @@ use app::{App, Layout, Selection};
 use grid::Grid;
 use light::{Light, WeatherFx};
 
-const SEED: u64 = 0x0B1B_00AC;
 /// Sim ticks (game minutes) per real second at ×1, so a game hour takes 10 seconds.
 /// The real time scale is still an open design question.
 const TICKS_PER_SECOND: f32 = 6.0;
@@ -35,7 +34,8 @@ fn window_conf() -> Conf {
 /// Command-line options, mostly for development:
 /// `--screenshot out.png` renders a few frames, saves the window and exits;
 /// `--advance N` runs N game minutes first; `--weather rain|fog|cloudy|clear`;
-/// `--scroll X`; `--select ID`; `--collapse-sky`.
+/// `--scroll X`; `--select ID`; `--collapse-sky`; `--seed N` (default: random);
+/// `--reveal` lifts the fog of war; `--overlay intro|help` shows one in a screenshot.
 #[derive(Default)]
 struct Args {
     screenshot: Option<String>,
@@ -44,6 +44,9 @@ struct Args {
     scroll: Option<f32>,
     select: Option<u32>,
     collapse_sky: bool,
+    seed: Option<u64>,
+    reveal: bool,
+    overlay: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -58,6 +61,9 @@ fn parse_args() -> Args {
             "--scroll" => args.scroll = value().parse().ok(),
             "--select" => args.select = value().parse().ok(),
             "--collapse-sky" => args.collapse_sky = true,
+            "--seed" => args.seed = value().parse().ok(),
+            "--reveal" => args.reveal = true,
+            "--overlay" => args.overlay = Some(value()),
             other => eprintln!("ignoring unknown argument {other}"),
         }
     }
@@ -80,7 +86,8 @@ async fn main() {
     font.set_filter(FilterMode::Linear);
     let mut grid = Grid::new(font);
 
-    let mut sim = Sim::new(SEED);
+    let seed = args.seed.unwrap_or_else(random_seed);
+    let mut sim = Sim::new(seed);
     for _ in 0..args.advance {
         step(&mut sim);
     }
@@ -89,6 +96,10 @@ async fn main() {
     }
     let mut app = App::new(Side::West);
     app.sky_collapsed = args.collapse_sky;
+    app.reveal = args.reveal;
+    app.intro = args.screenshot.is_none() || args.overlay.as_deref() == Some("intro");
+    app.help = args.overlay.as_deref() == Some("help");
+    app.paused = app.intro;
     app.selected = args.select.map(Selection::Army);
     let mut fx = WeatherFx::new(&sim);
 
@@ -105,6 +116,16 @@ async fn main() {
         grid.fit(app::rows_to_fit(app.sky_collapsed));
         let layout = Layout::new(&grid, app.sky_collapsed);
         app.handle_input(&mut sim, &grid, &layout);
+        if app.new_game {
+            sim = Sim::new(random_seed());
+            fx = WeatherFx::new(&sim);
+            let mut fresh = App::new(Side::West);
+            fresh.sky_collapsed = app.sky_collapsed;
+            fresh.reveal = app.reveal;
+            app = fresh;
+            app.center_on(sim.forts[1].pos.0 - 10, &layout);
+            pending = 0.0;
+        }
 
         let dt = get_frame_time().min(0.1);
         if !app.paused && args.screenshot.is_none() {
@@ -136,4 +157,9 @@ async fn main() {
         }
         next_frame().await;
     }
+}
+
+/// A fresh map each game. The sim itself never touches the clock.
+fn random_seed() -> u64 {
+    (macroquad::miniquad::date::now() * 1000.0) as u64
 }

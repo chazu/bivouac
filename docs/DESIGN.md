@@ -12,6 +12,29 @@ A real-time strategy game drawn in ASCII art. Armies march along a long side-scr
 
 The fun is in **where you put your armies and how you look after them**: when to march and when to rest, road or open country, intercepting enemy armies, keeping troops fed, and slipping small hidden groups through forests to raid supply lines. Weather and the sky (moon phase, clouds, rain, fog, omens) change what's possible from hour to hour.
 
+### Setting **[decided: fantasy, dying earth]**
+
+Fantasy in a dying-earth vein: an old, exhausted world under a swollen sun and strange skies. The leaning is a **faux-Chinese dying earth** **[proposed, first pass built]**: walled garrison towns, mills and granaries along imperial roads, banners, omens read in the heavens.
+
+First naming and look pass (v0.3):
+- **Factions:** *the Azure Remnant* (the player, west, azure) against *the Vermilion Host* (east, vermilion).
+- **Forts:**
+  - Lantern Gate (the Remnant's capital)
+  - Willow Ford Mill
+  - Nine Wells
+  - Crow Pagoda
+  - Salt Terrace
+  - Cinnabar Citadel (the Host's capital)
+- **Roads:** the Imperial Road, the Pilgrim Road, the Ridge Road, the Ferry Road.
+- **Armies:**
+  - The Remnant: First Banner, Second Banner, the Grey Sparrows (scouts). New armies are numbered Banners.
+  - The Host: the Cinnabar Host, the Ash Wolves (raiders). New armies are numbered Cohorts.
+- **Look:**
+  - A swollen, spotted, amber dying sun.
+  - Dusty slate and amber daytime skies, never blue.
+  - Warm daylight on the land.
+  - Pagoda roofs on forts (two tiers on capitals), with tall hanging banners in the owner's color.
+
 ## 2. Design pillars
 
 1. **Position over clicking.** You give orders to armies (march, rest, hold, divide, join), not to individual soldiers. Reflexes shouldn't decide games.
@@ -147,8 +170,12 @@ Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowl
 - **Color shows side** **[decided]**.
 - **Density is shown in braille** **[decided]**: one dot is roughly one company of about 50 men. A cell holding more than 8 dots spills into the next cell, so big armies cover several cells like a real column **[proposed details]**.
 - **Soldier pools:** players can **create armies from a pool of soldiers, join armies, and divide them** **[decided]**. Pools exist at forts (garrison and recruits) **[proposed]**.
-- **Army stats:** men, stamina, food, morale **[proposed; morale is new]**. Morale is affected by hunger, exhaustion, losses and omens like the blood moon.
-- **Orders:** march (to a target, with a route preference: road, direct, or concealed), rest, hold, divide, join, garrison, resupply **[proposed]**.
+- **One unit type** for now **[decided]**. Mixed types (cavalry, skirmishers) may come later.
+- **Army stats:** men, stamina, food, morale **[decided]**. Morale breaking is how battles end (§13).
+- **Formation:** an army on the move is a **column** strung along its route, 3 companies to a cell (1800 men make 12 cells of road). On a road it is drawn riding the road line. A halted army stays in column unless there's a reason to deploy. After 20 minutes still it deploys into a **line** across the valley's rows, center first, with extra ranks behind if the ground runs out, if a known enemy is within 10 cells, it is fighting, it is in a fort, or it was ordered to Hold. Lines block enemy movement, so one army can hold a line across the valley **[decided]**. Marching from a line, the column forms afresh at the head. Ordered back the way it came, a column turns about, so its tail leads **[built]**.
+- **Steering:** clicks near a road line pick the road cell. Shift+right-click adds waypoints, so you can route a march along a chosen road **[built]**.
+- **Stances** **[decided]**: *aggressive* (attacks enemies that come within reach and chases them), *defensive* (fights back when attacked and holds its ground), *evasive* (avoids contact and falls back when threatened).
+- **Orders:** march, attack (right-click an enemy), rest, hold, divide, join, garrison, set stance **[decided]**. Route preferences (road, direct, concealed) and resupply orders are **[proposed]**.
 
 ### Mockup 3 — troop glyphs
 
@@ -190,7 +217,9 @@ Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowl
 
 - Each player has a **main fort**. Taking the enemy's main fort wins the game **[decided]**.
 - **Neutral forts can be captured** **[decided]**. They act as **supply depots and/or garrisons** **[decided]**, and they come with different **extras** ("accoutrements", e.g. dairy cows) **[decided in concept]**.
-- How capture works: a fort is captured when its garrison is gone and an army holds it for N hours. Neutral forts start with a small militia garrison **[proposed]**.
+- How capture works: a fort's garrison fights any hostile army within reach of its walls. Once the garrison breaks, an army that holds the fort alone for an hour takes it. Neutral forts start with a small militia garrison **[decided]**.
+- Sieges are **minimal** for now: storm the garrison **[decided]**. Starving a fort out, siege works and the like can come later.
+- Garrisons count as fully dug in. Whether **fort walls** give an extra bonus is **[open]**.
 
 ### Fort extras **[proposed]**
 
@@ -228,34 +257,54 @@ The sky is drawn as big animated text art **[decided]**, and it affects gameplay
 
 Detection uses **partly dice rolls** **[decided]**. Main armies should be visible from relatively far away so the cat-and-mouse positioning works **[decided]**.
 
-### Detection levels **[proposed]**
+### Detection levels **[decided, built]**
 
 | Level | What the observer sees | How |
 |---|---|---|
 | Unseen | Nothing | — |
-| Rumored | Dust by day, campfire glow by night. Position off by ±N cells, size as a bucket ("large?") | Large armies are nearly always rumored at long range |
-| Sighted | Exact cell, size within about ±25% | Line of sight plus a roll |
-| Identified | Exact numbers, stamina, food | Up close or by scouts |
+| Rumored | Dust by day, campfire glow by night. Position off by up to ±3 cells, size rounded to 250 with ±30% error | Within the army's rumor range; no roll |
+| Sighted | Exact cell, size within about ±15% | Inside an observer's sight, plus a roll |
+| Identified | Exact numbers, stamina, morale, food | Within 1 cell, within 3 on a successful roll, or in battle |
+| Remembered | A faded marker where the army was last seen, for up to 24 hours | Lost contact |
 
-### Signature vs. sight **[proposed]**
+### How it works **[built, v0.3; numbers are first guesses]**
 
-- **Signature** (how noticeable a group is) rises with its size and activity (marching > resting, campfires at night) and is changed by terrain (forest hides) and weather (rain cuts dust, fog cuts everything).
-- **Sight** (how far an observer sees) depends on unit type (scouts see best), height (forts, watchtowers, hills) and light (daylight > full moon > clouded > new moon).
-- Every detection tick, each observer rolls against each group in range, using signature × sight × distance falloff.
-- **Tracks:** groups leave tracks that fade over hours and last longer in mud and rain. Trackers can follow them. Owners can see their own tracks.
-- **Deception:** leave campfires burning after you march off, split off quietly, or use small groups as decoys.
+- **When:** detection rolls every 5 game minutes, deterministically, so the AI and netplay obey it too.
+- **Sight radius** (in cells): 12 by day. At night it's 4, plus up to 6 more from moonlight (cut to a third under cloud or rain). Rain multiplies sight by 0.7; fog caps it at 3. Forts see 2 farther, and a watchtower adds 6. Routing armies see half as far.
+- **Chance to sight** a group inside an observer's range:
+  - Base: 30% + 4% per company, up to 90%.
+  - Changes: +20% if it's marching, and +15% for campfires (camped at night). Forest multiplies the chance by 0.35, and very small groups (3 companies or fewer) by 0.6. +25% for a fresh trail through mud (marching in rain), and +40% if you were already tracking it.
+  - Distance: the result is scaled from 100% right next to the observer down to 50% at the edge of its range.
+- **Rumor range** (dust or fires): 8 + 1.5 × companies, ×1.3 while marching. At night it's halved unless the army is camped with fires. Fog multiplies it by 0.4, daytime rain by 0.6, forest by 0.3. A marching host of 2000 is rumored from about 88 cells away.
+- **Tracks:** armies leave tracks off-road. They last 6 hours, or 18 in rain-mud. You see your own tracks faintly everywhere, and enemy tracks only within your sight.
+- **Ambush:** attacking an army whose side hadn't sighted you costs it 15% morale on the spot.
+- **The AI is fogged too.** It only attacks what it can see. Pathfinding only avoids enemies you can see, so hidden armies are discovered by bumping into them.
+- **The log is fogged too.** Each side only sees its own movements and scout reports. Battles, fort captures and weather are public news.
+- **Deception** (decoy campfires and so on) is still **[proposed]**.
 
-## 13. Combat **[open]**
+## 13. Combat **[decided]**
 
-Not discussed yet. Questions to settle:
-- Is combat automatic when armies meet, or something you order?
-- Does a fight last over time (several ticks) so either side can reinforce or retreat?
-- How do stamina, morale, terrain, fort walls and ambushes (attacking from hiding) change the result?
-- What happens to the loser: rout, retreat, prisoners?
+It should feel like an RTS: fights start by themselves, play out over time, and are won mostly by position.
+
+- **Fights start on contact** when someone wants them: an aggressive army, or one ordered to attack. Two defensive armies can stand next to each other without fighting. Once started, a fight goes on while the armies touch, until one routs.
+- **Only the front fights.** Each map cell of an army that touches an enemy cell fights, and its strength is split across the enemy cells it touches. A column caught on the road fights with its head; a line fights with everything. Attacked from more than one direction (flanked), an army loses morale much faster.
+- **Battles end in a rout** when morale breaks **[decided]**, usually at around 15–25% losses. Losses cost morale in proportion to the army's size. A routed army flees toward the nearest friendly fort for two hours, ignores orders, takes double losses if it's chased, then rallies.
+- **Withdrawing** while engaged is allowed, at half speed and under fire.
+- **Short battles** **[decided]**: an even fight breaks in about 2–4 game hours (20–40 real seconds at ×1). A clearly bigger army wins faster.
+- **Modifiers**:
+  - Defending in **forest** cuts losses **[decided]**.
+  - Attacking from a **bridge** narrows the front **[decided]**.
+  - **Entrenchment** builds while an army stands still (full after about 5½ hours) and cuts its losses by up to 40% **[decided]**.
+  - Stamina scales damage.
+  - Night and rain dull everyone.
+  - Garrisons count as fully dug in.
+  - Each blow has a dice roll (50–150%).
+  - Ambush bonuses wait on detection (§12).
+- Battles don't add any special food rules **[decided]**.
 
 ## 14. Victory
 
-- Take the enemy's main fort **[decided]**, or
+- Take the enemy's main fort **[decided, built]**, or
 - Push the enemy until they give up **[decided]**. Proposal: surrender happens when an overall morale or "war will" score drops below a threshold, driven by lost forts, losses and starvation **[proposed]**.
 
 ## 15. Fort / depot screen
@@ -318,13 +367,13 @@ The small picture of the fort is animated in the real window: the mill wheel tur
 
 ## 19. Open questions (summary)
 
-1. Combat model (§13).
-2. Time scale: real seconds per game hour, length of a typical game.
-3. Forest capacity: how many men per cell can move through.
-4. Pausing in netplay.
-5. Foraging.
-6. Map generation: hand-made maps, generated maps, or both?
-7. Does morale exist as its own stat? (I proposed it; check.)
+1. Fort walls: an extra defensive bonus beyond the garrison being dug in?
+2. Setting details: names, look and lore for the dying-earth world.
+3. Time scale: real seconds per game hour, length of a typical game.
+4. Forest capacity: how many men per cell can move through.
+5. Pausing in netplay.
+6. Foraging.
+7. Map generation: hand-made maps, generated maps, or both?
 8. Scouts as a separate unit type, or just small detachments?
 
 ## 20. Implementation status (v0.1, 2026-10-24)
@@ -338,11 +387,23 @@ Built:
 - Weather: clear/overcast/rain/fog as a Markov chain; rain slows movement and costs extra stamina; fog and rain overlays.
 - The HUD: status bar, minimap, hover / selected / log panel.
 - A deterministic sim with a checksum, plus tests for determinism, road connectivity, bridges, the forest cap, capture, and divide/join.
+- **Combat (v0.2)**, as in §13. The sim tests cover routs, a bigger army winning, big armies reaching a decision, garrisons having to be beaten first, deploying into line, and routed armies ignoring orders. `cargo test -p bivouac-sim battle_report -- --ignored --nocapture` prints battle-pacing numbers, and `cargo test -p bivouac-ai campaign_log -- --ignored --nocapture` prints a 4-day AI campaign.
+- On screen: sparks along the lines of contact, drifting dust, earthworks in front of dug-in armies, shaking and faded routing armies, a dashed line to an attack target, morale and stance in the panel, and a victory/defeat banner.
+
+- **Detection and fog of war (v0.3)**, as in §12. On screen, everything outside your sight is darkened. Rumored enemies show as a pulsing `░?░` smudge, and remembered ones as a fading ghost. Tracks show as dot trios, and the hover panel says what you know. The selected-army panel shows your army's *exposure* (how well the enemy knows it), and the status bar shows the current sight radius.
+- **Making it playable (v0.3):**
+  - An opening briefing; the game starts paused.
+  - Help (F1 or `?`).
+  - A random map each game (`--seed N` to repeat one).
+  - A victory/defeat screen with `[N]` for a new game.
+  - Mustering 400 men from a fort's garrison (`M`).
+  - Daily recruits at held forts: capitals +120, villages +40, others +15.
+  - Capitals produce 2500 grain a day.
+  - The AI musters new cohorts too.
+  - `--reveal` lifts the fog for debugging.
 
 Placeholders, until the open questions are settled:
-- **No combat (§13).** Enemy armies can't enter each other's cell, so you can block a road but not fight for it. Garrisons don't resist capture.
-- **No fog of war or detection (§12).** Everything is visible.
-- **AI** marches idle armies at the nearest fort it doesn't hold, and rests when tired.
+- **AI** keeps its armies aggressive and marches idle ones at the nearest fort it doesn't hold. It attacks defenders it can see there, and rests when tired. It has no real strategy yet.
 - **Time scale:** 1 game hour = 10 s at ×1 (`TICKS_PER_SECOND` in the client).
 - **Forest cap** is 150 men (`path::FOREST_CAP`).
 - The full depot screen (Mockup 4) is not built yet. Selecting a fort shows a compact version in the panel.

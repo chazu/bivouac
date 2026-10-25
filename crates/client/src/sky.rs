@@ -9,7 +9,8 @@ use crate::palette::{alpha, fbm, mix, rgb, scale};
 
 const BLOOD_MOON_RADIUS: f32 = 5.2;
 const MOON_RADIUS: f32 = 3.0;
-const SUN_RADIUS: f32 = 1.5;
+/// The sun is old and swollen: big, dim enough to look at, spotted.
+const SUN_RADIUS: f32 = 3.4;
 
 /// Sky band: gradient, stars, sun or moon, clouds.
 pub fn draw(g: &Grid, l: &Layout, light: &Light, sim: &Sim, t: f32) {
@@ -60,10 +61,16 @@ pub fn draw(g: &Grid, l: &Layout, light: &Light, sim: &Sim, t: f32) {
     if light.sun.alt > -0.1 {
         let cx = light.sun.x * l.cols as f32;
         let cy = horizon - light.sun.alt * (span - SUN_RADIUS - 1.0);
-        let warm = 1.0 - light.sun.alt.clamp(0.0, 0.5) * 2.0;
-        let color = mix(rgb(1.0, 0.95, 0.70), rgb(1.0, 0.55, 0.25), warm);
-        glow(g, cx, cy, SUN_RADIUS, color, 0.05);
-        disc(g, l, cx, cy, SUN_RADIUS, color, Color::new(0.0, 0.0, 0.0, 0.0), |_, _| Some(1.0));
+        let low = 1.0 - light.sun.alt.clamp(0.0, 0.5) * 2.0;
+        let color = mix(rgb(1.0, 0.62, 0.30), rgb(0.95, 0.30, 0.12), low);
+        glow(g, cx, cy, SUN_RADIUS, color, 0.07 * (1.0 - light.cloud * 0.5));
+        let churn = t * 0.03;
+        disc(g, l, cx, cy, SUN_RADIUS, color, Color::new(0.0, 0.0, 0.0, 0.0), |u, v| {
+            let spots = fbm(u * 3.0 + churn, v * 3.0 + 40.0, 9);
+            let limb = (1.0 - (u * u + v * v)).max(0.0).sqrt();
+            let dark = if spots > 0.68 { 0.45 } else { 1.0 };
+            Some(((0.55 + 0.45 * limb) * dark).min(1.0))
+        });
     }
 
     if light.moon.alt > -0.1 {

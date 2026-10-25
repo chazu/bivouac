@@ -1,4 +1,4 @@
-use bivouac_sim::{Army, Cell, MAP_H, MAP_W, Order, Side, Sim};
+use bivouac_sim::{Army, Cell, MAP_H, MAP_W, Order, Seen, Side, Sim};
 use macroquad::prelude::*;
 
 use crate::grid::Grid;
@@ -16,6 +16,8 @@ pub fn rows_to_fit(sky_collapsed: bool) -> f32 {
 }
 pub const SPEEDS: [u32; 4] = [1, 2, 4, 8];
 const FLASH_SECONDS: f64 = 3.0;
+/// How close (in rows) to a road line the mouse must be to pick the road.
+const ROAD_SNAP: f32 = 0.45;
 
 /// Where each band of the screen starts, in rows.
 pub struct Layout {
@@ -66,8 +68,18 @@ pub struct App {
     pub sky_collapsed: bool,
     pub paused: bool,
     pub speed_idx: usize,
+    /// Debug: ignore fog of war.
+    pub reveal: bool,
+    /// The opening briefing, shown until dismissed.
+    pub intro: bool,
+    pub help: bool,
+    /// Set when the player asks for a new game; main swaps in a fresh sim.
+    pub new_game: bool,
     flash: Option<(String, f64)>,
 }
+
+/// Muster this many men at a time from a fort's garrison.
+pub const MUSTER_MEN: u32 = 400;
 
 impl App {
     pub fn new(player: Side) -> App {
@@ -79,8 +91,28 @@ impl App {
             sky_collapsed: false,
             paused: false,
             speed_idx: 0,
+            reveal: false,
+            intro: true,
+            help: false,
+            new_game: false,
             flash: None,
         }
+    }
+
+    /// How well the player knows an army: their own always fully, enemies only
+    /// as far as their scouts report.
+    pub fn seen(&self, sim: &Sim, a: &Army) -> Option<Seen> {
+        if a.side == self.player || self.reveal { Some(Seen::Identified) } else { sim.knows(self.player, a.id) }
+    }
+
+    /// Whether the player can currently see an army where it actually stands.
+    pub fn in_view(&self, sim: &Sim, a: &Army) -> bool {
+        self.seen(sim, a).is_some_and(|s| s >= Seen::Sighted)
+    }
+
+    /// Whether a cell is inside the player's current field of view.
+    pub fn watching(&self, sim: &Sim, c: Cell) -> bool {
+        self.reveal || sim.intel(self.player).sees(c)
     }
 
     pub fn speed(&self) -> u32 {
@@ -112,20 +144,25 @@ impl App {
     }
 
     /// Map cell under a screen position.
-    pub fn cell_at(&self, g: &Grid, l: &Layout, (mx, my): (f32, f32)) -> Option<Cell> {
-        let row = (my / g.ch).floor() as i32 - l.map_top;
+    /// The map cell under the mouse. Near a road line it's the road cell, so
+    /// clicking a road always means the road.
+    pub fn cell_at(&self, sim: &Sim, g: &Grid, l: &Layout, (mx, my): (f32, f32)) -> Option<Cell> {
+        let fy = my / g.ch - l.map_top as f32;
+        let row = fy.floor() as i32;
         if !(0..MAP_H).contains(&row) {
             return None;
         }
-        let x0 = self.scroll.floor();
-        let frac = (self.scroll - x0) * g.cw;
-        let col = ((mx + frac) / g.cw).floor() as i32 + x0 as i32;
-        (0..MAP_W).contains(&col).then_some((col, row))
+        let fx = self.scroll + mx / g.cw;
+        let col = fx.floor() as i32;
+        if !(0..MAP_W).contains(&col) {
+            return None;
+        }
+        Some(sim.map.road_near(fx, fy, ROAD_SNAP).unwrap_or((col, row)))
     }
 
     pub fn handle_input(&mut self, sim: &mut Sim, g: &Grid, l: &Layout) {
         let mouse = mouse_position();
-        self.hover = self.cell_at(g, l, mouse);
+        self.hover = self.cell_at(sim, g, l, mouse);
 
         let mut dx = 0.0;
         if is_key_down(KeyCode::Left) {
@@ -155,9 +192,39 @@ impl App {
         if is_mouse_button_pressed(MouseButton::Right)
             && let (Some(to), Some(Selection::Army(army))) = (self.hover, self.selected)
         {
-            self.order(sim, Order::March { army, to });
+            // Right-clicking an enemy attacks it; anywhere else is a march.
+            let side = sim.army(army).map(|a| a.side);
+            let enemy = sim
+                .armies
+                .iter()
+                .find(|a| Some(a.side) != side && a.occupies(to) && self.in_view(sim, a))
+                .map(|a| a.id);
+            // Shift adds a waypoint, to steer the march along a chosen road.
+            let queue = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+            let order = match enemy {
+                Some(target) => Order::Attack { army, target },
+                None if queue => Order::Waypoint { army, to },
+                None => Order::March { army, to },
+            };
+            self.order(sim, order);
         }
 
+        if self.intro {
+            if is_key_pressed(KeyCode::Space)
+                || is_key_pressed(KeyCode::Enter)
+                || is_mouse_button_pressed(MouseButton::Left)
+            {
+                self.intro = false;
+                self.paused = false;
+            }
+            return;
+        }
+        if is_key_pressed(KeyCode::F1) || is_key_pressed(KeyCode::Slash) {
+            self.help = !self.help;
+        }
+        if sim.winner.is_some() && is_key_pressed(KeyCode::N) {
+            self.new_game = true;
+        }
         if is_key_pressed(KeyCode::Space) {
             self.paused = !self.paused;
         }
@@ -171,6 +238,16 @@ impl App {
         }
         if is_key_pressed(KeyCode::Escape) {
             self.selected = None;
+            self.help = false;
+        }
+        if let Some(Selection::Fort(fort)) = self.selected
+            && is_key_pressed(KeyCode::M)
+        {
+            let before = sim.armies.len();
+            self.order(sim, Order::Muster { fort, men: MUSTER_MEN });
+            if sim.armies.len() > before {
+                self.selected = sim.armies.last().map(|a| Selection::Army(a.id));
+            }
         }
         if is_key_pressed(KeyCode::Tab) {
             self.cycle_armies(sim, l);
@@ -189,6 +266,10 @@ impl App {
                 Some(Order::Divide { army })
             } else if is_key_pressed(KeyCode::J) {
                 Some(Order::Join { army })
+            } else if is_key_pressed(KeyCode::G) {
+                Some(Order::Garrison { army })
+            } else if is_key_pressed(KeyCode::Q) {
+                sim.army(army).map(|a| Order::SetStance { army, stance: a.stance.next() })
             } else {
                 None
             };
@@ -196,8 +277,9 @@ impl App {
                 self.order(sim, o);
             }
         }
+        // Drop a selection that's gone: destroyed, or an enemy that slipped out of view.
         if let Some(Selection::Army(id)) = self.selected
-            && sim.army(id).is_none()
+            && sim.army(id).is_none_or(|a| !self.in_view(sim, a))
         {
             self.selected = None;
         }
@@ -211,7 +293,7 @@ impl App {
 
     /// Clicking a cell cycles through the armies in it (yours first), then the fort.
     fn select_at(&mut self, sim: &Sim, c: Cell) {
-        let mut here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c)).collect();
+        let mut here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c) && self.in_view(sim, a)).collect();
         here.sort_by_key(|a| (a.side != self.player, a.id));
         let mut choices: Vec<Selection> = here.iter().map(|a| Selection::Army(a.id)).collect();
         if let Some(f) = sim.fort_at(c) {

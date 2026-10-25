@@ -18,18 +18,33 @@ fn fort(
     extras: Vec<Extra>,
     garrison: u32,
 ) -> Fort {
-    Fort { id, name, kind, pos: (x, 8), owner, stores, extras, garrison, capture: None }
+    let garrison_morale = crate::army::MORALE_MAX * 8 / 10;
+    Fort {
+        id,
+        name,
+        kind,
+        pos: (x, 8),
+        owner,
+        stores,
+        extras,
+        garrison,
+        garrison_morale,
+        garrison_bleed: 0,
+        capture: None,
+    }
 }
 
-/// The opening scenario: one valley, two main forts, four neutral holdings between.
+/// The opening scenario: one valley under a dying sun. The Azure Remnant holds
+/// Lantern Gate in the west, the Vermilion Host the Cinnabar Citadel in the east,
+/// and four neutral holdings lie along the Imperial Road between them.
 pub(crate) fn ashford_valley(seed: u64) -> Sim {
     use Extra::*;
     use FortKind::*;
     let forts = vec![
-        fort(0, "Greywall Keep", Main, 4, Some(Side::West), [3000, 200, 400], vec![Palisade, Granary], 300),
+        fort(0, "Lantern Gate", Main, 4, Some(Side::West), [3000, 200, 400], vec![Palisade, Granary], 300),
         fort(
             1,
-            "Ashford Mill",
+            "Willow Ford Mill",
             Mill,
             48,
             None,
@@ -37,13 +52,13 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
             vec![WaterMill, DairyHerd(12), Granary, Palisade],
             190,
         ),
-        fort(2, "Thornby", Village, 96, None, [400, 80, 0], vec![], 60),
-        fort(3, "Crow's Watch", Keep, 144, None, [600, 0, 150], vec![Watchtower, Palisade], 120),
-        fort(4, "Saltmarsh", Mill, 192, None, [900, 40, 300], vec![WaterMill, Smokehouse], 90),
-        fort(5, "Redhold", Main, 235, Some(Side::East), [3000, 200, 400], vec![Palisade, Granary], 300),
+        fort(2, "Nine Wells", Village, 96, None, [400, 80, 0], vec![], 60),
+        fort(3, "Crow Pagoda", Keep, 144, None, [600, 0, 150], vec![Watchtower, Palisade], 120),
+        fort(4, "Salt Terrace", Mill, 192, None, [900, 40, 300], vec![WaterMill, Smokehouse], 90),
+        fort(5, "Cinnabar Citadel", Main, 235, Some(Side::East), [3000, 200, 400], vec![Palisade, Granary], 300),
     ];
 
-    // The King's Road links every fort, wandering between them.
+    // The Imperial Road links every fort, wandering between them.
     let mut rng = Rng::new(seed ^ 0x6B69_6E67);
     let mut kings = Vec::new();
     for pair in forts.windows(2) {
@@ -56,13 +71,13 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
     kings.push((forts[5].pos.0 as f32, 8.5));
 
     let roads = vec![
-        Road { name: "King's Road", points: kings },
+        Road { name: "Imperial Road", points: kings },
         Road {
-            name: "North Road",
+            name: "Pilgrim Road",
             points: vec![(4.0, 8.5), (14.0, 5.2), (30.0, 3.6), (52.0, 3.4), (72.0, 4.6), (88.0, 6.5), (96.0, 8.5)],
         },
         Road {
-            name: "High Road",
+            name: "Ridge Road",
             points: vec![
                 (96.0, 8.5),
                 (106.0, 5.5),
@@ -75,7 +90,7 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
             ],
         },
         Road {
-            name: "River Road",
+            name: "Ferry Road",
             points: vec![
                 (48.0, 8.5),
                 (60.0, 13.4),
@@ -91,13 +106,13 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
     let centers: Vec<_> = forts.iter().map(|f| f.pos).collect();
     let map = Map::generate(seed, &centers, roads);
 
-    let on_kings = |x| map.road_cell(0, x);
+    let on_road = |x| map.road_cell(0, x);
     let armies = vec![
-        Army::new(1, Side::West, "1st Army", 1800, forts[0].pos),
-        Army::new(2, Side::West, "2nd Column", 640, on_kings(22)),
-        Army::new(3, Side::West, "Scouts", 60, on_kings(34)),
-        Army::new(4, Side::East, "Red Host", 2000, forts[5].pos),
-        Army::new(5, Side::East, "Raiders", 400, on_kings(214)),
+        Army::new(1, Side::West, "First Banner", 1800, forts[0].pos),
+        Army::new(2, Side::West, "Second Banner", 640, on_road(22)),
+        Army::new(3, Side::West, "Grey Sparrows", 60, on_road(34)),
+        Army::new(4, Side::East, "Cinnabar Host", 2000, forts[5].pos),
+        Army::new(5, Side::East, "Ash Wolves", 400, on_road(214)),
     ];
 
     Sim {
@@ -109,6 +124,15 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
         weather: Weather::Clear,
         wind: -1,
         log: VecDeque::new(),
+        clashes: Vec::new(),
+        engaged: Vec::new(),
+        battles: Vec::new(),
+        garrison_fights: Vec::new(),
+        announced: Vec::new(),
+        raised: [2, 0],
+        intel: Default::default(),
+        tracks: Vec::new(),
+        winner: None,
         rng: Rng::new(seed),
         next_army_id: 6,
     }
