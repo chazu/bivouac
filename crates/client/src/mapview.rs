@@ -1,5 +1,5 @@
-use bivouac_sim::rng::hash2;
 use bivouac_sim::convoy::WAGONS;
+use bivouac_sim::rng::hash2;
 use bivouac_sim::{ArmyState, Cell, Convoy, FortKind, MAP_H, MAP_W, Seen, Sim, Terrain};
 use macroquad::prelude::*;
 
@@ -12,6 +12,7 @@ const FIELD: Color = rgb(0.46, 0.52, 0.30);
 const MUD: Color = rgb(0.50, 0.40, 0.26);
 const FOREST: Color = rgb(0.18, 0.56, 0.25);
 const ROCK: Color = rgb(0.56, 0.56, 0.62);
+const HILL: Color = rgb(0.62, 0.56, 0.36);
 const SNOW: Color = rgb(0.88, 0.88, 0.94);
 const WATER: Color = rgb(0.30, 0.50, 0.88);
 const ROAD: Color = rgb(0.74, 0.62, 0.42);
@@ -74,10 +75,49 @@ pub fn draw(g: &Grid, l: &Layout, app: &App, sim: &Sim, light: &Light, t: f32) {
     draw_convoys(g, &v, l, app, sim, light, t);
     draw_armies(g, &v, l, app, sim, light, t);
     draw_clashes(g, &v, app, sim, t);
+    draw_march_preview(g, &v, app, sim);
 
     if let Some((x, y)) = app.hover {
         draw_rectangle_lines(v.px(x), v.py(y as f32), g.cw, g.ch, 1.5, Color::new(1.0, 1.0, 1.0, 0.55));
     }
+}
+
+/// With one of your armies selected, where a right-click would send it: the
+/// route, where it would end up, and how long it would take.
+fn draw_march_preview(g: &Grid, v: &View, app: &App, sim: &Sim) {
+    let (Some(Selection::Army(id)), Some(to)) = (app.selected, app.hover) else { return };
+    let Some(a) = sim.army(id).filter(|a| a.side == app.player && !a.routing()) else { return };
+    // Right-clicking an enemy or its wagons attacks; there's no march to preview.
+    if a.occupies(&sim.map, to)
+        || sim.armies.iter().any(|b| b.side != a.side && b.occupies(&sim.map, to) && app.in_view(sim, b))
+        || app.convoys_at(sim, to).any(|c| c.side != a.side)
+    {
+        return;
+    }
+    let center = |(x, y): Cell| (v.px(x) + g.cw * 0.5, v.py(y as f32 + 0.5));
+    let Some(route) = sim.plan_march(a, to) else {
+        let (cx, cy) = center(to);
+        let (r, red) = (g.cw * 0.35, Color::new(1.0, 0.4, 0.3, 0.8));
+        draw_line(cx - r, cy - r, cx + r, cy + r, 2.0, red);
+        draw_line(cx - r, cy + r, cx + r, cy - r, 2.0, red);
+        return;
+    };
+    let ghost = Color::new(1.0, 1.0, 1.0, 0.45);
+    for &c in &route {
+        let (cx, cy) = center(c);
+        draw_circle(cx, cy, 1.5, ghost);
+    }
+    let end = route.last().copied().unwrap_or(a.pos);
+    let (ex, ey) = center(end);
+    draw_circle_lines(ex, ey, g.cw * 0.45, 1.5, ghost);
+    let mut note = crate::hud::duration(sim.route_minutes(a, &route));
+    if end != to {
+        // Too big for the woods, or blocked: it stops as close as it can get.
+        note.push_str(" · as near as it can");
+        let (tx, ty) = center(to);
+        draw_line(ex, ey, tx, ty, 1.0, Color::new(1.0, 0.6, 0.4, 0.5));
+    }
+    g.label(ex, v.py(end.1 as f32) - g.ch * 0.8, &note, Color::new(1.0, 1.0, 1.0, 0.8));
 }
 
 fn terrain_glyph(sim: &Sim, x: i32, y: i32, light: &Light, t: f32) -> Option<(char, Color)> {
@@ -105,6 +145,7 @@ fn terrain_glyph(sim: &Sim, x: i32, y: i32, light: &Light, t: f32) -> Option<(ch
             (glyph, scale(ground, vary))
         }
         Terrain::Forest => ('♣', scale(FOREST, vary)),
+        Terrain::Hill => (if h.is_multiple_of(5) { '⌒' } else { '∩' }, scale(HILL, vary)),
         Terrain::Mountain => {
             // The far ridge is hazier and more varied, so it reads as distance, not a border.
             let top = y == 0 || sim.map.terrain(x, y - 1) != Terrain::Mountain;
@@ -181,6 +222,11 @@ fn draw_forts(g: &Grid, v: &View, l: &Layout, sim: &Sim, light: &Light, t: f32) 
         for (dy, row) in rows.iter().enumerate() {
             for (dx, &c) in row.iter().enumerate() {
                 let (x, y) = (fx - 2 + dx as i32, fy - 1 + dy as i32);
+                if sim.map.is_gate(x, y) {
+                    // Timber gates where the roads run in: the only way through the walls.
+                    g.put_px(v.px(x), v.py(y as f32), 'Π', light.lit_bright(PLANKS));
+                    continue;
+                }
                 g.put_px(v.px(x), v.py(y as f32), c, if dy == 1 && dx % 4 != 0 { scale(color, 0.7) } else { color });
             }
         }
@@ -264,7 +310,7 @@ fn draw_armies(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Lig
         // On a road the column rides the road line itself, curving with it: its
         // companies are dots strung along the line rather than braille in a cell.
         let column: Vec<(Cell, u32, Option<Span>)> = a
-            .column()
+            .column(&sim.map)
             .into_iter()
             .map(|(c, n)| {
                 let span = sim.map.road_span(c.0, c.1).map(|((x0, y0), (x1, y1))| {
@@ -301,7 +347,7 @@ fn draw_armies(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Lig
                 Some((p0, p1)) => dots_along(g, p0, p1, n, color),
                 None => g.put_px(px, py, braille_char(DENSITY[(n - 1) as usize]), color),
             }
-            if a.entrench > 150 {
+            if a.entrench > 150 && sim.map.terrain(x, y) != Terrain::Fort {
                 // Earthworks thrown up in front of a dug-in army.
                 let w = g.cw * (0.3 + 0.7 * a.entrench as f32 / 1000.0);
                 let front = if a.side == bivouac_sim::Side::West { px + g.cw - 2.0 } else { px + 1.0 };

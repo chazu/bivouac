@@ -1,5 +1,5 @@
 use bivouac_sim::clock::{FULL_MOON, hhmm, moon_phase_name};
-use bivouac_sim::path::FOREST_CAP;
+use bivouac_sim::path::{FOREST_CAP, MOUNTAIN_CAP};
 use bivouac_sim::{Army, ArmyState, Cell, Convoy, Fort, Leg, MAP_W, Seen, Side, Sim, Terrain};
 use macroquad::prelude::*;
 
@@ -69,6 +69,7 @@ fn intro(g: &Grid, l: &Layout, app: &App) {
             ("Take the Citadel, or hold your gate until they break.", TEXT),
             ("", TEXT),
             ("Armies standing still deploy into line and dig in.", DIM),
+            ("Forts are entered only by their gates, where the roads run in; walls count as earthworks.", DIM),
             ("Your scouts only see so far: dust, campfires and tracks give enemies away.", DIM),
             ("Forests hide small parties. Night, fog and rain shorten everyone's sight.", DIM),
             ("", TEXT),
@@ -95,6 +96,7 @@ fn help(g: &Grid, l: &Layout) {
             ("  +shift         add a waypoint, to steer along a road", TEXT),
             ("R / H            rest / halt in line of battle", TEXT),
             ("Q                cycle stance: aggressive, defensive, evasive", TEXT),
+            ("P                cycle pace: easy (slow, spares stamina), steady, forced", TEXT),
             ("D / shift+D      detach a 150-man raiding party / divide in half", TEXT),
             ("J                join armies in the same cell", TEXT),
             ("G                put the army into the garrison of your fort", TEXT),
@@ -175,7 +177,7 @@ fn bar(frac: f32, n: usize) -> String {
     format!("{}{}", "▰".repeat(k), "▱".repeat(n - k))
 }
 
-fn duration(minutes: u32) -> String {
+pub(crate) fn duration(minutes: u32) -> String {
     match minutes {
         m if m < 60 => format!("{m}m"),
         m if m < 48 * 60 => format!("{}h {:02}m", m / 60, m % 60),
@@ -340,8 +342,9 @@ fn terrain_words(sim: &Sim, (x, y): Cell) -> String {
     }
     match m.terrain(x, y) {
         Terrain::Field => "open field · slow, tiring".into(),
-        Terrain::Forest => format!("forest · at most {FOREST_CAP} men"),
-        Terrain::Mountain => "mountain · impassable".into(),
+        Terrain::Forest => format!("forest · hides; over {FOREST_CAP} men crowd and crawl"),
+        Terrain::Hill => "hills · slow; sees farther, defends better".into(),
+        Terrain::Mountain => format!("mountain · only parties of {MOUNTAIN_CAP} or fewer; lookout"),
         Terrain::River => "river · impassable".into(),
         Terrain::Fort => "fortification".into(),
     }
@@ -386,7 +389,7 @@ fn status_words(a: &Army) -> String {
         ArmyState::Routing => return format!("ROUTING · rallies in {}", duration(a.rout_left)),
     };
     let formation = if a.deployed() { "in line" } else { "in column" };
-    format!("{state} {formation} · {}", a.stance.label())
+    format!("{state} {formation} · {} · {}", a.stance.label(), a.pace.label())
 }
 
 fn state_color(a: &Army) -> Color {
@@ -411,6 +414,9 @@ fn hover_column(pen: &mut Pen, app: &App, sim: &Sim) {
         return;
     };
     pen.segs(&[("HOVER  ", HEADING), (&terrain_words(sim, c), TEXT)]);
+    if let Some(r) = sim.map.region_at(c.0).filter(|_| sim.fort_at(c).is_none()) {
+        pen.segs(&[(r.name, TEXT), (&format!(" · {}", r.country.label()), DIM)]);
+    }
     if let Some(f) = sim.fort_at(c) {
         pen.segs(&[
             (f.name, palette::side_or_stone(f.owner)),
@@ -420,7 +426,7 @@ fn hover_column(pen: &mut Pen, app: &App, sim: &Sim) {
     if !app.watching(sim, c) {
         pen.line("beyond your sight", DIM);
     }
-    let here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c) && app.in_view(sim, a)).collect();
+    let here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(&sim.map, c) && app.in_view(sim, a)).collect();
     for a in here.iter().take(3) {
         pen.gap();
         army_lines(pen, a, app, sim);
@@ -467,7 +473,8 @@ fn convoy_doing(c: &Convoy, sim: &Sim) -> String {
 fn convoy_detail(pen: &mut Pen, c: &Convoy, app: &App, sim: &Sim) {
     pen.segs(&[("SELECTED  ", HEADING), (&c.name, palette::side(c.side))]);
     let names = bivouac_sim::fort::GOODS;
-    let cargo: Vec<String> = names.iter().zip(c.cargo).filter(|(_, n)| *n > 0).map(|(g, n)| format!("{g} {n}")).collect();
+    let cargo: Vec<String> =
+        names.iter().zip(c.cargo).filter(|(_, n)| *n > 0).map(|(g, n)| format!("{g} {n}")).collect();
     if c.side != app.player {
         pen.line("Enemy supply wagons.", DIM);
         pen.segs(&[("cargo    ", DIM), (if c.load() > 0 { "laden" } else { "empty, going home" }, TEXT)]);
@@ -541,7 +548,16 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
         ("morale   ", DIM),
         (&bar(a.morale_pct() as f32 / 100.0, 10), morale_color(a)),
         (&format!(" {}%", a.morale_pct()), TEXT),
-        (&if a.entrench > 0 { format!("   dug in {}%", a.entrench / 10) } else { String::new() }, DIM),
+        (
+            &if sim.fort_at(a.pos).is_some() {
+                "   behind walls".to_string()
+            } else if a.entrench > 0 {
+                format!("   dug in {}%", a.entrench / 10)
+            } else {
+                String::new()
+            },
+            DIM,
+        ),
     ]);
     pen.segs(&[("status   ", DIM), (&status_words(a), state_color(a))]);
     let target = a.target.and_then(|t| sim.army(t));
@@ -571,7 +587,7 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
             _ => ("unseen by the enemy", rgb(0.55, 0.85, 0.55)),
         };
         pen.segs(&[("exposure ", DIM), exposure]);
-        pen.line("[RMB] march / attack  [R]est [H]old [Q] stance", DIM);
+        pen.line("[RMB] march / attack  [R]est [H]old [Q] stance [P]ace", DIM);
         pen.line("[D] detach 150 (shift: half) [J]oin [G]arrison", DIM);
     } else {
         pen.line("Enemy army: you can't command it.", DIM);
@@ -624,8 +640,12 @@ fn fort_detail(pen: &mut Pen, f: &Fort, app: &App, sim: &Sim) {
         if let Some(c) = sim.route_from(f.id) {
             pen.segs(&[("supply   ", DIM), (&format!("{}: {}", c.name, convoy_doing(c, sim)), TEXT)]);
         }
-        let incoming: Vec<&str> =
-            sim.convoys.iter().filter(|c| c.to == f.id && c.side == app.player).map(|c| fort_name(sim, c.from)).collect();
+        let incoming: Vec<&str> = sim
+            .convoys
+            .iter()
+            .filter(|c| c.to == f.id && c.side == app.player)
+            .map(|c| fort_name(sim, c.from))
+            .collect();
         if !incoming.is_empty() {
             pen.segs(&[("fed by   ", DIM), (&incoming.join(", "), TEXT)]);
         }

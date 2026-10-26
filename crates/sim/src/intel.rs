@@ -10,6 +10,9 @@ use crate::rng::hash2;
 use crate::{Cell, Extra, Side, Sim, push_private};
 
 pub const DETECT_EVERY: u32 = 5;
+/// Extra cells of sight from standing on a hill, and on a mountain.
+pub const HILL_SIGHT: i32 = 3;
+pub const MOUNTAIN_SIGHT: i32 = 5;
 /// How long a lost contact stays on the map as a memory.
 const MEMORY_MINUTES: u32 = 24 * 60;
 /// A contact lost at least this long is announced again when found.
@@ -165,7 +168,14 @@ impl Sim {
             let mut observers: Vec<(Cell, i32)> = Vec::new();
             for a in self.armies.iter().filter(|a| a.side == side) {
                 let r = if a.routing() { base / 2 } else { base };
-                observers.extend(a.column().into_iter().map(|(c, _)| (c, r)));
+                // High ground sees farther, unless fog shrouds everything.
+                let height = |(x, y): Cell| match self.map.terrain(x, y) {
+                    _ if self.weather == Weather::Fog => 0,
+                    Terrain::Hill => HILL_SIGHT,
+                    Terrain::Mountain => MOUNTAIN_SIGHT,
+                    _ => 0,
+                };
+                observers.extend(a.column(&self.map).into_iter().map(|(c, _)| (c, r + height(c))));
             }
             for f in self.forts.iter().filter(|f| f.owner == Some(side)) {
                 let tower = if f.extras.contains(&Extra::Watchtower) { 6 } else { 0 };
@@ -189,7 +199,7 @@ impl Sim {
                     continue;
                 }
                 let prev = self.intel[side as usize].report(e.id).copied();
-                let cells = e.column();
+                let cells = e.column(&self.map);
                 let near = |o: Cell| cells.iter().map(|&(c, _)| distance(o, c)).min().unwrap_or(i32::MAX);
                 let closest = observers.iter().map(|&(o, _)| near(o)).min().unwrap_or(i32::MAX);
                 // Best margin inside some observer's range, and that observer's range.

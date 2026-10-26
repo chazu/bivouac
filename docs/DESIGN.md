@@ -141,13 +141,26 @@ What's on the map: `⣿⣷` is your 1st Army at Greywall Keep. `⣦` is your 2nd
 |---|---|---|---|---|
 | Road | `─ ‾ _ ╱ ╲ │ ╭╮╰╯` | Fast | Low cost | **[decided]** |
 | Field | `·` | Passable, slower | Costs stamina | **[decided]** |
-| Forest | `♣` | Passable only by small numbers at a time | Medium | Concealment **[decided]**. The exact size cap per cell is **[open]**. |
-| Mountain | `▲` | Impassable | — | Blocks line of sight **[proposed]** |
+| Forest | `♣` | 50 min a cell for up to 150 men. Bigger forces get in but crawl: +8 min for each extra 150 men, up to +100 | 20, plus 2 per extra 150 men (up to +25) | Concealment **[decided]**. A forest cell holds only 3 companies, so a big army strings out and its line spreads wide **[built]**. Defenders take 60% damage. |
+| Hill | `∩ ⌒` | 45 min a cell | 18 | High ground: +3 sight (not in fog), and attackers do 80% damage **[built]** |
+| Mountain | `▲` | Parties of 100 men or fewer only, 90 min a cell **[built]** | 35 | A lookout: +5 sight. A cell holds 3 companies, and defenders take 60% damage. Blocks line of sight **[proposed]** |
 | River | `≈` | Impassable except at bridges and fords **[proposed]** | — | |
 | Bridge / ford | `╪` | Chokepoint | — | **[proposed]** |
 | Fort | `▛▀▜ ▌▓▐ ▙▄▟` | — | Rest and resupply | See §9 |
 
 Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowly than fields **[proposed]**.
+
+**Pace** **[built]**: every army marches at an easy pace (×0.7 speed, half the stamina per cell), a steady one, or a forced march (×1.5 speed, double the stamina per cell). It's set with `P` and shown in the army's status. A forced march over a long distance exhausts the men, and exhausted armies move at half speed, so it pays off only over short stretches. Routing armies run at a steady speed whatever their pace.
+
+### The valley **[built]**
+
+Each stretch between two forts gets its own **country** and a name. The first four stretches get one of each country, in random order; the fifth gets any country except its neighbor's. Where an army is is reported by stretch ("in the Tiger Hills") and shown in the hover panel.
+- **Deep woods** (e.g. "the Old Cedar Deep"): one great wood across most of the valley, a belt of trees running from the ridge to the river so small parties can cross unseen, and a few glades. Armies stay on the road or crawl.
+- **A mountain pass** (e.g. "the Dragon's Teeth"): one or two spurs of the ridge reach down to row 7–8. That leaves a defile a row or two wide above the river, plus wherever a road cuts through. It's a natural place to hold a line. Foothills skirt the spurs, and scouts can climb the spurs to look out.
+- **Hill country** (e.g. "the Tiger Hills"): rolling hills, some crowned with crags, with copses on their slopes. High ground to fight over.
+- **Open farmland** (e.g. "the Plum Orchards"): open fields crossed by hedgerows. Room for armies to maneuver, with a little cover for raiders creeping up.
+
+Everywhere, foothills gather at the foot of the ridge, and each stretch gets copses right against the high road where raiders can lie in wait.
 
 ### Roads (curves) **[proposed]**
 
@@ -175,7 +188,7 @@ Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowl
 - **Formation:** an army on the move is a **column** strung along its route, 3 companies to a cell (1800 men make 12 cells of road). On a road it is drawn riding the road line. A halted army stays in column unless there's a reason to deploy. After 20 minutes still it deploys into a **line** across the valley's rows, center first, with extra ranks behind if the ground runs out, if a known enemy is within 10 cells, it is fighting, it is in a fort, or it was ordered to Hold. Lines block enemy movement, so one army can hold a line across the valley **[decided]**. Marching from a line, the column forms afresh at the head. Ordered back the way it came, a column turns about, so its tail leads **[built]**.
 - **Steering:** clicks near a road line pick the road cell. Shift+right-click adds waypoints, so you can route a march along a chosen road **[built]**.
 - **Stances** **[decided]**: *aggressive* (attacks enemies that come within reach and chases them), *defensive* (fights back when attacked and holds its ground), *evasive* (avoids contact and falls back when threatened).
-- **Orders:** march, attack (right-click an enemy), rest, hold, divide, join, garrison, set stance **[decided]**. Route preferences (road, direct, concealed) and resupply orders are **[proposed]**.
+- **Orders:** march, attack (right-click an enemy), rest, hold, divide, join, garrison, set stance, set pace **[decided]**. A march to somewhere the army can't reach (a mountain, or blocked ground) goes as close as the ground allows. With an army selected, hovering the map previews the route, the ETA, and whether the army will stop short **[built]**. Route preferences (road, direct, concealed) and resupply orders are **[proposed]**.
 
 ### Mockup 3 — troop glyphs
 
@@ -217,7 +230,7 @@ Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowl
   - Wagons are seen whenever they're in sight: no dice. Right-click them with an army to run them down. Aggressive armies go after wagons they see within 6 cells.
   - If a fort at either end falls, the train turns for whichever end is still held, unloads and disbands.
   - The AI chains routes from its capital through each fort it holds toward the front.
-- `D` detaches a 150-man party (the forest limit); shift+`D` divides in half. Detachments keep their parent's morale and stance.
+- `D` detaches a 150-man party (one forest cell's worth, so it moves through woods at full forest speed); shift+`D` divides in half. Detachments keep their parent's morale and stance.
 - Foraging: armies in fields can scrape up a little food, which drains the land **[open]**.
 
 ## 10. Forts
@@ -227,6 +240,8 @@ Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowl
 - How capture works: a fort's garrison fights any hostile army within reach of its walls. Once the garrison breaks, an army that holds the fort alone for an hour takes it. Neutral forts start with a small militia garrison **[decided]**.
 - Sieges are **minimal** for now: storm the garrison **[decided]**. Starving a fort out, siege works and the like can come later.
 - Garrisons count as fully dug in. Whether **fort walls** give an extra bonus is **[open]**.
+- **Walls and gates** **[built]**: a fort's walls can only be crossed at its **gates**, the wall cells where a road runs through. Armies and wagons enter and leave by the gates. An army inside forms its line within the walls, and an army outside can't deploy into them. Fighting across a wall is allowed: a besieger can strike defenders from the ground just outside. Gates are drawn as timber `Π`s in the wall.
+- Armies **inside the walls count as fully dug in** while they're there, even as they move from cell to cell **[built]**. They lose that cover the moment they step out of a gate.
 
 ### Fort extras **[proposed]**
 
@@ -299,12 +314,12 @@ It should feel like an RTS: fights start by themselves, play out over time, and 
 - **Withdrawing** while engaged is allowed, at half speed and under fire.
 - **Short battles** **[decided]**: an even fight breaks in about 2–4 game hours (20–40 real seconds at ×1). A clearly bigger army wins faster.
 - **Modifiers**:
-  - Defending in **forest** cuts losses **[decided]**.
+  - Defending in **forest** or on a **mountain** cuts losses to 60%, and on a **hill** to 80% **[decided]**.
   - Attacking from a **bridge** narrows the front **[decided]**.
   - **Entrenchment** builds while an army stands still (full after about 5½ hours) and cuts its losses by up to 40% **[decided]**.
   - Stamina scales damage.
   - Night and rain dull everyone.
-  - Garrisons count as fully dug in.
+  - Garrisons, and armies inside fort walls, count as fully dug in.
   - Each blow has a dice roll (50–150%).
   - Ambush bonuses wait on detection (§12).
 - Battles don't add any special food rules **[decided]**.
@@ -377,7 +392,7 @@ The small picture of the fort is animated in the real window: the mill wheel tur
 1. Fort walls: an extra defensive bonus beyond the garrison being dug in?
 2. Setting details: names, look and lore for the dying-earth world.
 3. Time scale: real seconds per game hour, length of a typical game.
-4. Forest capacity: how many men per cell can move through.
+4. ~~Forest capacity~~: settled. A forest cell holds 3 companies, and bigger forces crawl (§Terrain).
 5. Pausing in netplay.
 6. Foraging.
 7. Map generation: hand-made maps, generated maps, or both?
@@ -388,7 +403,7 @@ The small picture of the fort is animated in the real window: the mill wheel tur
 Built:
 - A workspace with `sim`, `ai` and `client` crates. The macroquad renderer draws its own glyph grid: braille, block and shade characters are drawn as shapes so they tile seamlessly, and everything else comes from the bundled DejaVu Sans Mono.
 - The sky: day/night gradient, sun, moon with real phases and rise times, blood moon with glow and a red wash over the land, stars, drifting clouds. It collapses to a 2-row strip, and the cells grow to fill the freed space.
-- The map: generated valley (ridge, spurs, forests, winding river), 6 forts, 4 spline roads drawn as quantized curves, bridges.
+- The map: generated valley (ridge with foothills, a winding river, five named stretches of woods, passes, hills or farmland; see §The valley), 6 forts with gates, 4 spline roads drawn as quantized curves, bridges.
 - Armies: braille density, columns stretching back along their trail, selection, path preview, march/rest/hold/divide/join, stamina, food, resupply in friendly forts, starvation.
 - Forts: stores, daily production from extras, garrison eating, capture by holding for 60 minutes.
 - Weather: clear/overcast/rain/fog as a Markov chain rolled every 3 hours (rain about 7% of the time, a spell every ~3 days); rain slows movement and costs extra stamina; fog and rain overlays.
@@ -412,5 +427,5 @@ Built:
 Placeholders, until the open questions are settled:
 - **AI** keeps its armies aggressive and marches idle ones at the nearest fort it doesn't hold. It attacks defenders it can see there, and rests when tired. It has no real strategy yet.
 - **Time scale:** 1 game hour = 10 s at ×1 (`TICKS_PER_SECOND` in the client).
-- **Forest cap** is 150 men (`path::FOREST_CAP`).
+- **Forest crowding**: 150 men to a forest cell (`path::FOREST_CAP`). Bigger forces pay +8 min and +2 stamina a cell for each extra 150 men. **Mountain cap** is 100 men (`path::MOUNTAIN_CAP`).
 - The full depot screen (Mockup 4) is not built yet. Selecting a fort shows a compact version in the panel.

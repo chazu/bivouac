@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use crate::map::{Map, Terrain};
 use crate::{Cell, Side};
 
 pub const MEN_PER_COMPANY: u32 = 50;
@@ -7,6 +8,9 @@ pub const MEN_PER_COMPANY: u32 = 50;
 pub const COMPANIES_PER_CELL: u32 = 8;
 /// On the march an army strings out along its road, a few companies to a cell.
 pub const MARCH_COMPANIES_PER_CELL: u32 = 3;
+/// Among the trees or the rocks a cell holds only a few companies, so a big army
+/// strings out through them.
+pub const CRAMPED_COMPANIES_PER_CELL: u32 = 3;
 pub const STAMINA_MAX: u16 = 1000;
 /// Food is tracked in thousandths of a ration (one ration feeds one man for a day)
 /// so hourly eating doesn't round away.
@@ -55,6 +59,60 @@ impl Stance {
     }
 }
 
+/// How hard an army is pushed on the march.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// Two-thirds speed for half the stamina per cell.
+    Slow,
+    Normal,
+    /// Half again as fast, at double the stamina per cell.
+    Fast,
+}
+
+impl Pace {
+    pub fn label(self) -> &'static str {
+        match self {
+            Pace::Slow => "easy pace",
+            Pace::Normal => "steady pace",
+            Pace::Fast => "forced march",
+        }
+    }
+
+    pub fn next(self) -> Pace {
+        match self {
+            Pace::Slow => Pace::Normal,
+            Pace::Normal => Pace::Fast,
+            Pace::Fast => Pace::Slow,
+        }
+    }
+
+    /// Progress toward the next cell each minute, in tenths of a minute of its cost.
+    pub fn speed(self) -> u32 {
+        match self {
+            Pace::Slow => 7,
+            Pace::Normal => 10,
+            Pace::Fast => 15,
+        }
+    }
+
+    /// Scales the stamina a step costs.
+    pub fn strain(self, cost: u16) -> u16 {
+        match self {
+            Pace::Slow => cost / 2,
+            Pace::Normal => cost,
+            Pace::Fast => cost * 2,
+        }
+    }
+}
+
+/// How many companies fit in a cell.
+pub fn room(map: &Map, (x, y): Cell) -> u32 {
+    match map.terrain(x, y) {
+        Terrain::Forest | Terrain::Mountain if !map.is_road(x, y) => CRAMPED_COMPANIES_PER_CELL,
+        _ => COMPANIES_PER_CELL,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Army {
     pub id: u32,
@@ -74,7 +132,9 @@ pub struct Army {
     pub starving: bool,
     pub morale: u32,
     pub stance: Stance,
+    pub pace: Pace,
     /// How dug in the army is; builds while it stays put, lost when it moves.
+    /// Inside fort walls it doesn't matter: the walls count as fully dug in.
     pub entrench: u16,
     /// Enemy army this one is attacking or chasing.
     pub target: Option<u32>,
@@ -109,6 +169,7 @@ impl Army {
             starving: false,
             morale: MORALE_MAX * 8 / 10,
             stance: Stance::Defensive,
+            pace: Pace::Normal,
             entrench: 0,
             target: None,
             quarry: None,
@@ -141,22 +202,25 @@ impl Army {
     }
 
     /// Cells the army occupies with the companies in each: its deployed line,
-    /// or, on the march, a column stretching back along its trail.
-    pub fn column(&self) -> Vec<(Cell, u32)> {
+    /// or, on the march, a column stretching back along its trail. Woods and
+    /// rocks hold fewer companies than open ground.
+    pub fn column(&self, map: &Map) -> Vec<(Cell, u32)> {
         let mut left = self.companies();
+        let mut cells: Vec<(Cell, u32)> = Vec::new();
         if self.deployed() {
-            let mut cells = Vec::new();
             for &c in &self.line {
                 if left == 0 {
                     break;
                 }
-                let n = left.min(COMPANIES_PER_CELL);
+                let n = left.min(room(map, c));
                 cells.push((c, n));
                 left -= n;
             }
-            if left > 0 {
-                // Too few cells for everyone (losses rearranged nothing): crowd the center.
-                cells[0].1 = (cells[0].1 + left).min(COMPANIES_PER_CELL);
+            // Too few cells for everyone (losses rearranged nothing): crowd the center.
+            for cell in cells.iter_mut() {
+                let more = left.min(room(map, cell.0).saturating_sub(cell.1));
+                cell.1 += more;
+                left -= more;
             }
             return cells;
         }
@@ -168,23 +232,25 @@ impl Army {
         }
         // Thin along a long trail, bunched up when there's no room behind.
         let per = left.div_ceil(spots.len() as u32).clamp(MARCH_COMPANIES_PER_CELL, COMPANIES_PER_CELL);
-        let mut cells: Vec<(Cell, u32)> = Vec::new();
         for c in spots {
             if left == 0 {
                 break;
             }
-            let n = left.min(per);
+            let n = left.min(per).min(room(map, c));
             cells.push((c, n));
             left -= n;
         }
-        if let Some(tail) = cells.last_mut() {
-            tail.1 = (tail.1 + left).min(COMPANIES_PER_CELL);
+        // Whoever didn't fit packs in at the tail.
+        for cell in cells.iter_mut().rev() {
+            let more = left.min(room(map, cell.0).saturating_sub(cell.1));
+            cell.1 += more;
+            left -= more;
         }
         cells
     }
 
-    pub fn occupies(&self, c: Cell) -> bool {
-        self.column().iter().any(|&(cell, _)| cell == c)
+    pub fn occupies(&self, map: &Map, c: Cell) -> bool {
+        self.column(map).iter().any(|&(cell, _)| cell == c)
     }
 
     pub fn routing(&self) -> bool {

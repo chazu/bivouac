@@ -97,7 +97,10 @@ mod tests {
             println!("day {} {} {}", e.minute / 1440, bivouac_sim::clock::hhmm(e.minute), e.text);
         }
         for c in &sim.convoys {
-            println!("convoy {} {:?} {}→{} leg {:?} at {:?} delivered {}", c.name, c.side, c.from, c.to, c.leg, c.pos, c.delivered);
+            println!(
+                "convoy {} {:?} {}→{} leg {:?} at {:?} delivered {}",
+                c.name, c.side, c.from, c.to, c.leg, c.pos, c.delivered
+            );
         }
         for a in &sim.armies {
             let path_end = a.path.back();

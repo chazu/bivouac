@@ -18,7 +18,7 @@ pub fn rows_to_fit(sky_collapsed: bool) -> f32 {
 pub const SPEEDS: [u32; 4] = [1, 2, 4, 8];
 const FLASH_SECONDS: f64 = 3.0;
 /// How close (in rows) to a road line the mouse must be to pick the road.
-const ROAD_SNAP: f32 = 0.45;
+const ROAD_SNAP: f32 = 0.2;
 
 /// Where each band of the screen starts, in rows.
 pub struct Layout {
@@ -212,7 +212,7 @@ impl App {
             let enemy = sim
                 .armies
                 .iter()
-                .find(|a| Some(a.side) != side && a.occupies(to) && self.in_view(sim, a))
+                .find(|a| Some(a.side) != side && a.occupies(&sim.map, to) && self.in_view(sim, a))
                 .map(|a| a.id);
             let wagons = self.convoys_at(sim, to).find(|c| Some(c.side) != side).map(|c| c.id);
             // Shift adds a waypoint, to steer the march along a chosen road.
@@ -300,6 +300,8 @@ impl App {
                 Some(Order::Garrison { army })
             } else if is_key_pressed(KeyCode::Q) {
                 sim.army(army).map(|a| Order::SetStance { army, stance: a.stance.next() })
+            } else if is_key_pressed(KeyCode::P) {
+                sim.army(army).map(|a| Order::SetPace { army, pace: a.pace.next() })
             } else {
                 None
             };
@@ -326,7 +328,8 @@ impl App {
 
     /// Clicking a cell cycles through the armies in it (yours first), wagons, then the fort.
     fn select_at(&mut self, sim: &Sim, c: Cell) {
-        let mut here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c) && self.in_view(sim, a)).collect();
+        let mut here: Vec<&Army> =
+            sim.armies.iter().filter(|a| a.occupies(&sim.map, c) && self.in_view(sim, a)).collect();
         here.sort_by_key(|a| (a.side != self.player, a.id));
         let mut choices: Vec<Selection> = here.iter().map(|a| Selection::Army(a.id)).collect();
         choices.extend(self.convoys_at(sim, c).map(|w| Selection::Convoy(w.id)));

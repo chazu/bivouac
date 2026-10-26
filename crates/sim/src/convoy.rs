@@ -36,7 +36,9 @@ pub enum Leg {
     Unloading(u32),
     Returning,
     /// Taken or burned; a new train sets out from the source at `until`.
-    Lost { until: u32 },
+    Lost {
+        until: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -266,9 +268,11 @@ impl Sim {
     fn depart(&mut self, i: usize) {
         let (from, to) = (self.convoys[i].from, self.convoys[i].to);
         let room = self.forts.iter().find(|f| f.id == to).map_or(0, |f| f.room());
-        let spare = self.forts.iter().find(|f| f.id == from).map_or(0, |f| {
-            f.total_stores().saturating_sub(f.garrison * RESERVE_DAYS)
-        });
+        let spare = self
+            .forts
+            .iter()
+            .find(|f| f.id == from)
+            .map_or(0, |f| f.total_stores().saturating_sub(f.garrison * RESERVE_DAYS));
         let want = CONVOY_LOAD.min(spare).min(room);
         let route = self.wagon_route(self.convoys[i].pos, self.fort_pos(to));
         let (Some(route), true) = (route, want >= MIN_LOAD) else {
@@ -308,7 +312,7 @@ impl Sim {
         let side = self.convoys[i].side;
         let Some(&next) = self.convoys[i].path.front() else { return self.arrive(i) };
         // Wagons can't push through an army; they wait, which is often fatal.
-        if self.armies.iter().any(|a| a.side != side && a.occupies(next)) {
+        if self.armies.iter().any(|a| a.side != side && a.occupies(&self.map, next)) {
             return false;
         }
         let Some(cost) = path::wagon_cost(&self.map, next, self.weather) else {
@@ -358,7 +362,7 @@ impl Sim {
             }
             let cells = c.cells();
             let near = |a: &crate::Army| {
-                !a.routing() && a.column().iter().any(|&(x, _)| cells.iter().any(|&w| distance(x, w) <= 1))
+                !a.routing() && a.column(&self.map).iter().any(|&(x, _)| cells.iter().any(|&w| distance(x, w) <= 1))
             };
             let guarded = self.armies.iter().any(|a| a.side == c.side && near(a))
                 || self.forts.iter().any(|f| f.owner == Some(c.side) && f.garrison > 0 && f.contains(c.pos));
@@ -463,9 +467,12 @@ mod tests {
         let before = sim.forts[0].total_stores();
         for _ in 0..24 * 60 {
             sim.tick();
-            assert!(sim.convoys[0].cells().iter().all(|&(x, y)| {
-                sim.map.is_road(x, y) || sim.map.terrain(x, y) == crate::Terrain::Fort
-            }));
+            assert!(
+                sim.convoys[0]
+                    .cells()
+                    .iter()
+                    .all(|&(x, y)| { sim.map.is_road(x, y) || sim.map.terrain(x, y) == crate::Terrain::Fort })
+            );
         }
         assert!(sim.convoys[0].delivered >= CONVOY_LOAD, "delivered {}", sim.convoys[0].delivered);
         assert!(sim.forts[1].total_stores() > 0);

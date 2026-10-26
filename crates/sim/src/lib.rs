@@ -15,7 +15,7 @@ mod scenario;
 
 use std::collections::VecDeque;
 
-pub use army::{Army, ArmyState, Stance};
+pub use army::{Army, ArmyState, Pace, Stance};
 pub use clock::{Clock, Weather};
 pub use combat::Clash;
 pub use convoy::{Convoy, Leg};
@@ -90,6 +90,11 @@ pub enum Order {
     SetStance {
         army: u32,
         stance: Stance,
+    },
+    /// March slower to spare stamina, or force the pace.
+    SetPace {
+        army: u32,
+        pace: Pace,
     },
     /// Put the army into the garrison of the friendly fort it stands in.
     Garrison {
@@ -211,7 +216,11 @@ impl Sim {
 
     /// Every cell an enemy of `side` occupies. Armies can't walk through each other.
     pub fn enemy_cells(&self, side: Side) -> Vec<Cell> {
-        self.armies.iter().filter(|a| a.side != side).flat_map(|a| a.column().into_iter().map(|(c, _)| c)).collect()
+        self.armies
+            .iter()
+            .filter(|a| a.side != side)
+            .flat_map(|a| a.column(&self.map).into_iter().map(|(c, _)| c))
+            .collect()
     }
 
     /// Routes around enemies this army's side can see; unseen ones are bumped into.
@@ -220,14 +229,36 @@ impl Sim {
     }
 
     fn plan_path_from(&self, army: &Army, from: Cell, to: Cell) -> Option<Vec<Cell>> {
-        let intel = self.intel(army.side);
-        let enemies: Vec<Cell> = self
-            .armies
-            .iter()
-            .filter(|a| a.side != army.side && intel.level(a.id).is_some_and(|s| s >= Seen::Sighted))
-            .flat_map(|a| a.column().into_iter().map(|(c, _)| c))
-            .collect();
+        let enemies = self.sighted_enemy_cells(army.side);
         path::find_path(&self.map, from, to, army.men, self.weather, |c| enemies.contains(&c))
+    }
+
+    /// Where a march order to `to` would take `army`: there, or if the army can't
+    /// get there (too big for the woods, say), as close as the ground allows.
+    pub fn plan_march(&self, army: &Army, to: Cell) -> Option<Vec<Cell>> {
+        self.plan_march_from(army, army.pos, to)
+    }
+
+    fn plan_march_from(&self, army: &Army, from: Cell, to: Cell) -> Option<Vec<Cell>> {
+        let enemies = self.sighted_enemy_cells(army.side);
+        let cost = |c| path::enter_cost(&self.map, c, army.men, self.weather);
+        path::find_route_near(&self.map, from, to, cost, |c| enemies.contains(&c))
+    }
+
+    fn sighted_enemy_cells(&self, side: Side) -> Vec<Cell> {
+        let intel = self.intel(side);
+        self.armies
+            .iter()
+            .filter(|a| a.side != side && intel.level(a.id).is_some_and(|s| s >= Seen::Sighted))
+            .flat_map(|a| a.column(&self.map).into_iter().map(|(c, _)| c))
+            .collect()
+    }
+
+    /// Game minutes for `army` to walk `route` at its pace, at current conditions.
+    pub fn route_minutes(&self, army: &Army, route: &[Cell]) -> u32 {
+        let cost: u32 =
+            route.iter().map(|&c| path::enter_cost(&self.map, c, army.men, self.weather).unwrap_or(0)).sum();
+        cost * 10 / army.pace.speed()
     }
 
     pub fn in_battle(&self, army: u32) -> bool {
@@ -236,9 +267,8 @@ impl Sim {
 
     /// Game minutes until `army` finishes its march, at current conditions.
     pub fn eta_minutes(&self, army: &Army) -> u32 {
-        let total: u32 =
-            army.path.iter().map(|&c| path::enter_cost(&self.map, c, army.men, self.weather).unwrap_or(0)).sum();
-        total.saturating_sub(army.progress / 10)
+        let route: Vec<Cell> = army.path.iter().copied().collect();
+        self.route_minutes(army, &route).saturating_sub(army.progress / army.pace.speed())
     }
 
     pub fn apply(&mut self, side: Side, order: Order) -> Result<(), &'static str> {
@@ -259,25 +289,26 @@ impl Sim {
             | Order::Raid { army, .. }
             | Order::Attack { army, .. }
             | Order::SetStance { army, .. }
+            | Order::SetPace { army, .. }
             | Order::Garrison { army } => army,
         };
         let i = self.armies.iter().position(|a| a.id == id).ok_or("no such army")?;
         if self.armies[i].side != side {
             return Err("not your army");
         }
-        if self.armies[i].routing() && !matches!(order, Order::SetStance { .. }) {
+        if self.armies[i].routing() && !matches!(order, Order::SetStance { .. } | Order::SetPace { .. }) {
             return Err("routing: deaf to orders until it rallies");
         }
         match order {
             Order::March { to, .. } => {
-                let mut path = self.plan_path(&self.armies[i], to).ok_or("no route there")?;
+                let mut path = self.plan_march(&self.armies[i], to).ok_or("no route there")?;
                 // Doubling back: the column turns about and its tail leads.
-                let cells: Vec<Cell> = self.armies[i].column().iter().map(|&(c, _)| c).collect();
+                let cells: Vec<Cell> = self.armies[i].column(&self.map).iter().map(|&(c, _)| c).collect();
                 if !self.armies[i].deployed() && cells.len() > 1 && path.first() == cells.get(1) {
                     let mut turned = self.armies[i].clone();
                     turned.pos = cells[cells.len() - 1];
                     turned.trail = cells[..cells.len() - 1].iter().rev().copied().collect();
-                    if let Some(p) = self.plan_path(&turned, to) {
+                    if let Some(p) = self.plan_march(&turned, to) {
                         self.armies[i].pos = turned.pos;
                         self.armies[i].trail = turned.trail;
                         path = p;
@@ -296,7 +327,7 @@ impl Sim {
                 let Some(&end) = a.path.back().filter(|_| a.state == ArmyState::Marching) else {
                     return self.apply(side, Order::March { army, to });
                 };
-                let more = self.plan_path_from(a, end, to).ok_or("no route there")?;
+                let more = self.plan_march_from(a, end, to).ok_or("no route there")?;
                 self.armies[i].path.extend(more);
             }
             Order::Rest { .. } | Order::Hold { .. } => {
@@ -340,6 +371,9 @@ impl Sim {
             Order::SetStance { stance, .. } => {
                 self.armies[i].stance = stance;
             }
+            Order::SetPace { pace, .. } => {
+                self.armies[i].pace = pace;
+            }
             Order::Garrison { .. } => {
                 let a = &self.armies[i];
                 let f = self
@@ -369,6 +403,7 @@ impl Sim {
                 d.stamina = a.stamina;
                 d.morale = a.morale;
                 d.stance = a.stance;
+                d.pace = a.pace;
                 d.food = food;
                 self.next_army_id += 1;
                 let a = &mut self.armies[i];
@@ -484,7 +519,7 @@ impl Sim {
         let minute = self.clock.minute;
         let mut laid = Vec::new();
         let mut occupied: Vec<(Side, Cell)> =
-            self.armies.iter().flat_map(|a| a.column().into_iter().map(move |(c, _)| (a.side, c))).collect();
+            self.armies.iter().flat_map(|a| a.column(&self.map).into_iter().map(move |(c, _)| (a.side, c))).collect();
         for a in self.armies.iter_mut() {
             if !matches!(a.state, ArmyState::Marching | ArmyState::Routing) {
                 continue;
@@ -499,14 +534,16 @@ impl Sim {
             if occupied.iter().any(|&(s, c)| s != a.side && c == next) {
                 continue;
             }
-            let Some(cost) = path::enter_cost(&self.map, next, a.men, weather) else {
+            let cost =
+                path::enter_cost(&self.map, next, a.men, weather).filter(|_| !self.map.crosses_wall(a.pos, next));
+            let Some(cost) = cost else {
                 a.path.clear();
                 a.state = ArmyState::Holding;
                 push_private(&mut self.log, minute, Some(a.side), format!("{} finds the way impassable.", a.name));
                 continue;
             };
             // Exhaustion halves speed, and so does pulling out of a fight.
-            let mut pace = 10;
+            let mut pace = if a.routing() { Pace::Normal.speed() } else { a.pace.speed() };
             if a.exhausted() {
                 pace /= 2;
             }
@@ -524,7 +561,10 @@ impl Sim {
             if !self.map.is_road(next.0, next.1) {
                 laid.push((a.side, next));
             }
-            a.stamina = a.stamina.saturating_sub(path::stamina_cost(&self.map, next, weather));
+            let strain = path::stamina_cost(&self.map, next, a.men, weather);
+            // Routing men run flat out whatever their orders.
+            let strain = if a.routing() { strain } else { a.pace.strain(strain) };
+            a.stamina = a.stamina.saturating_sub(strain);
             if a.path.is_empty() && a.state == ArmyState::Marching {
                 a.state = ArmyState::Holding;
                 a.progress = 0;
@@ -587,7 +627,7 @@ impl Sim {
         let minute = self.clock.minute;
         for f in &mut self.forts {
             let mut present = [false; 2];
-            for a in self.armies.iter().filter(|a| a.column().iter().any(|&(c, _)| f.contains(c))) {
+            for a in self.armies.iter().filter(|a| a.column(&self.map).iter().any(|&(c, _)| f.contains(c))) {
                 present[a.side.idx()] = true;
             }
             let claimant = match present {
@@ -682,7 +722,14 @@ impl Sim {
             for v in [a.id as u64, a.men as u64, a.stamina as u64, a.food, a.pos.0 as u64, a.pos.1 as u64] {
                 mix(v);
             }
-            for v in [a.progress as u64, a.morale as u64, a.entrench as u64, a.state as u64, a.line.len() as u64] {
+            for v in [
+                a.progress as u64,
+                a.morale as u64,
+                a.entrench as u64,
+                a.state as u64,
+                a.pace as u64,
+                a.line.len() as u64,
+            ] {
                 mix(v);
             }
         }
@@ -749,14 +796,160 @@ mod tests {
     }
 
     #[test]
-    fn big_armies_cannot_enter_forest() {
-        let sim = Sim::new(SEED);
-        let forest = (0..MAP_W)
+    fn walls_are_passed_only_at_gates() {
+        for seed in 0..20 {
+            let sim = Sim::new(seed);
+            let host = sim.army(1).unwrap();
+            let mut walked = 0;
+            for f in &sim.forts {
+                let (fx, fy) = f.pos;
+                let gates = (fx - 2..=fx + 2).flat_map(|x| (fy - 1..=fy + 1).map(move |y| (x, y)));
+                assert!(
+                    gates.filter(|&(x, y)| sim.map.is_gate(x, y)).count() > 0,
+                    "seed {seed}: {} has no gate",
+                    f.name
+                );
+                for start in [(fx, fy - 2), (fx, fy + 2), (fx - 3, fy), (fx + 3, fy)] {
+                    if !sim.map.in_bounds(start.0, start.1) {
+                        continue;
+                    }
+                    let Some(route) = sim.plan_path_from(host, start, f.pos) else { continue };
+                    walked += 1;
+                    let mut at = start;
+                    for &next in &route {
+                        assert!(!sim.map.crosses_wall(at, next), "seed {seed}: climbed {}'s wall at {next:?}", f.name);
+                        at = next;
+                    }
+                }
+            }
+            assert!(walked >= 2 * sim.forts.len(), "seed {seed}: only {walked} routes into forts");
+        }
+    }
+
+    #[test]
+    fn a_line_in_a_fort_stays_behind_its_walls() {
+        let mut sim = Sim::new(SEED);
+        sim.armies.retain(|a| a.id == 1);
+        sim.armies[0].pos = (sim.forts[1].pos.0 + 1, sim.forts[1].pos.1 - 1);
+        sim.apply(Side::West, Order::Hold { army: 1 }).unwrap();
+        for _ in 0..combat::DEPLOY_MINUTES {
+            sim.tick();
+        }
+        let line = sim.armies[0].column(&sim.map);
+        assert_eq!(line.len(), 5, "1800 men still need 5 cells of line");
+        assert!(line.iter().all(|&(c, _)| sim.forts[1].contains(c)), "line spilled outside the walls: {line:?}");
+    }
+
+    fn open_forest(sim: &Sim) -> Cell {
+        (0..MAP_W)
             .flat_map(|x| (0..MAP_H).map(move |y| (x, y)))
-            .find(|&(x, y)| sim.map.terrain(x, y) == Terrain::Forest && !sim.map.is_road(x, y))
-            .unwrap();
-        assert!(path::enter_cost(&sim.map, forest, path::FOREST_CAP, Weather::Clear).is_some());
-        assert!(path::enter_cost(&sim.map, forest, path::FOREST_CAP + 1, Weather::Clear).is_none());
+            .find(|&(x, y)| {
+                sim.map.terrain(x, y) == Terrain::Forest
+                    && !sim.map.is_road(x, y)
+                    && sim.fort_at((x, y)).is_none()
+                    && (-1..=1).all(|dx| sim.map.terrain(x + dx, y) == Terrain::Forest && !sim.map.is_road(x + dx, y))
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn big_armies_crawl_through_forest() {
+        let sim = Sim::new(SEED);
+        let forest = open_forest(&sim);
+        let small = path::enter_cost(&sim.map, forest, path::FOREST_CAP, Weather::Clear).unwrap();
+        let big = path::enter_cost(&sim.map, forest, 1800, Weather::Clear).unwrap();
+        assert!(big >= small * 2, "1800 men should crawl: {big} vs {small} minutes a cell");
+        assert!(
+            path::stamina_cost(&sim.map, forest, 1800, Weather::Clear)
+                > path::stamina_cost(&sim.map, forest, path::FOREST_CAP, Weather::Clear),
+            "and tire faster"
+        );
+    }
+
+    #[test]
+    fn woods_hold_only_a_few_companies_a_cell() {
+        let mut sim = Sim::new(SEED);
+        sim.armies.retain(|a| a.id == 1);
+        sim.armies[0].pos = open_forest(&sim);
+        sim.apply(Side::West, Order::Hold { army: 1 }).unwrap();
+        for _ in 0..combat::DEPLOY_MINUTES {
+            sim.tick();
+        }
+        let line = sim.armies[0].column(&sim.map);
+        for &(c, n) in &line {
+            assert!(n <= army::room(&sim.map, c), "{n} companies crammed into {c:?}");
+        }
+        let cramped = line.iter().filter(|&&(c, _)| army::room(&sim.map, c) < army::COMPANIES_PER_CELL).count();
+        assert!(cramped > 0 && line.len() > 5, "a line in the woods spreads wider: {line:?}");
+    }
+
+    #[test]
+    fn an_easy_pace_spares_stamina_and_a_forced_march_spends_it() {
+        let run = |pace| {
+            let mut sim = Sim::new(SEED);
+            sim.armies.retain(|a| a.id == 2);
+            sim.apply(Side::West, Order::SetPace { army: 2, pace }).unwrap();
+            sim.apply(Side::West, Order::March { army: 2, to: sim.forts[1].pos }).unwrap();
+            let mut minutes = 0;
+            while sim.armies[0].state == ArmyState::Marching && minutes < 4000 {
+                sim.tick();
+                minutes += 1;
+            }
+            (minutes, sim.armies[0].stamina)
+        };
+        let (slow, fresh) = run(Pace::Slow);
+        let (steady, _) = run(Pace::Normal);
+        let (fast, tired) = run(Pace::Fast);
+        assert!(slow > steady && steady > fast, "{slow} / {steady} / {fast} minutes");
+        assert!(fresh > tired, "easy pace should arrive fresher: {fresh} vs {tired}");
+    }
+
+    #[test]
+    fn marching_at_a_mountain_stops_at_its_foot() {
+        let sim = Sim::new(SEED);
+        let host = sim.army(1).unwrap();
+        let peak = (host.pos.0 + 20, 0);
+        assert_eq!(sim.map.terrain(peak.0, peak.1), Terrain::Mountain);
+        assert!(sim.plan_path(host, peak).is_none());
+        let route = sim.plan_march(host, peak).expect("it should get as close as it can");
+        let end = *route.last().unwrap();
+        assert_ne!(sim.map.terrain(end.0, end.1), Terrain::Mountain);
+        assert!(end.1 <= 4, "should end up at the foot of the ridge, not {end:?}");
+    }
+
+    #[test]
+    fn every_valley_has_all_four_countries() {
+        for seed in 0..20 {
+            let sim = Sim::new(seed);
+            let regions = &sim.map.regions;
+            assert_eq!(regions.len(), sim.forts.len() - 1);
+            for country in
+                [map::Country::Woodland, map::Country::Narrows, map::Country::Highlands, map::Country::Farmland]
+            {
+                assert!(regions.iter().any(|r| r.country == country), "seed {seed}: no {country:?}");
+            }
+            for r in regions {
+                assert_eq!(regions.iter().filter(|q| q.name == r.name).count(), 1, "seed {seed}: two {}", r.name);
+                let cells = (r.x0..=r.x1).flat_map(|x| (3..10).map(move |y| (x, y)));
+                let count = |t| cells.clone().filter(|&(x, y)| sim.map.terrain(x, y) == t).count();
+                let (wood, hill, rock) = (count(Terrain::Forest), count(Terrain::Hill), count(Terrain::Mountain));
+                match r.country {
+                    map::Country::Woodland => assert!(wood > 80, "seed {seed}: {} is thin ({wood})", r.name),
+                    map::Country::Narrows => {
+                        // Somewhere the passable ground north of the river shrinks to a defile.
+                        let open = |x| {
+                            (0..10)
+                                .filter(|&y| !matches!(sim.map.terrain(x, y), Terrain::Mountain | Terrain::River))
+                                .count()
+                        };
+                        let narrowest = (r.x0..=r.x1).map(open).min().unwrap();
+                        assert!(rock > 15 && narrowest <= 5, "seed {seed}: {} is wide open ({narrowest} rows)", r.name);
+                    }
+                    map::Country::Highlands => assert!(hill > 25, "seed {seed}: {} is flat ({hill})", r.name),
+                    map::Country::Farmland => assert!(wood < 60, "seed {seed}: {} is overgrown ({wood})", r.name),
+                }
+            }
+        }
     }
 
     #[test]
@@ -874,13 +1067,14 @@ mod tests {
         let mut sim = Sim::new(SEED);
         sim.armies.retain(|a| a.id == 1);
         sim.armies[0].pos = sim.map.road_cell(0, 120);
-        assert_eq!(sim.armies[0].column().len(), 1, "a fresh army is bunched in one cell");
+        assert_eq!(sim.armies[0].column(&sim.map).len(), 1, "a fresh army is bunched in one cell");
         sim.apply(Side::West, Order::Hold { army: 1 }).unwrap();
         for _ in 0..combat::DEPLOY_MINUTES {
             sim.tick();
         }
-        let line = sim.armies[0].column();
-        assert_eq!(line.len(), 5, "1800 men = 36 companies = 5 cells of line");
+        let line = sim.armies[0].column(&sim.map);
+        // 36 companies make 5 cells of line in the open, more where it runs into woods.
+        assert!(line.len() >= 5, "1800 men = 36 companies = at least 5 cells of line");
         assert_eq!(line.iter().map(|&(_, n)| n).sum::<u32>(), 36);
         sim.apply(Side::West, Order::March { army: 1, to: sim.forts[2].pos }).unwrap();
         for _ in 0..60 {
@@ -901,7 +1095,7 @@ mod tests {
         }
         let a = &sim.armies[0];
         assert_eq!(a.state, ArmyState::Holding);
-        let column = a.column();
+        let column = a.column(&sim.map);
         assert_eq!(column.len(), 12, "36 companies, 3 to a cell");
         assert!(column.iter().all(|&((x, y), _)| sim.map.is_road(x, y)), "the whole column is on the road");
         assert!(!a.deployed(), "with no enemy about, a halted army stays in column");
@@ -911,7 +1105,7 @@ mod tests {
         let tail = column.last().unwrap().0;
         sim.apply(Side::West, Order::March { army: 1, to: back }).unwrap();
         assert_eq!(sim.armies[0].pos, tail, "the tail becomes the head");
-        assert_eq!(sim.armies[0].column().len(), 12);
+        assert_eq!(sim.armies[0].column(&sim.map).len(), 12);
     }
 
     #[test]
@@ -1061,3 +1255,4 @@ mod tests {
         assert_eq!(sim.army(1).unwrap().men, before);
     }
 }
+

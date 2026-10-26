@@ -4,7 +4,7 @@
 //! morale breaks and it routs.
 
 use crate::army::{
-    ArmyState, ENTRENCH_MAX, MARCH_COMPANIES_PER_CELL, MEN_PER_COMPANY, MORALE_MAX, STAMINA_MAX, Stance,
+    ArmyState, ENTRENCH_MAX, MARCH_COMPANIES_PER_CELL, MEN_PER_COMPANY, MORALE_MAX, STAMINA_MAX, Stance, room,
 };
 use crate::intel::{AMBUSH_SHOCK, Seen};
 use crate::map::{MAP_H, MAP_W, Terrain};
@@ -72,8 +72,8 @@ impl Sim {
 
     /// Whether any part of army `i` is next to any part of army `j`.
     fn touching(&self, i: usize, j: usize) -> bool {
-        let theirs = self.armies[j].column();
-        self.armies[i].column().iter().any(|&(c, _)| theirs.iter().any(|&(d, _)| distance(c, d) <= 1))
+        let theirs = self.armies[j].column(&self.map);
+        self.armies[i].column(&self.map).iter().any(|&(c, _)| theirs.iter().any(|&(d, _)| distance(c, d) <= 1))
     }
 
     /// A free cell next to army `j`'s head, as close to army `i` as possible.
@@ -108,21 +108,47 @@ impl Sim {
     pub fn place_name(&self, c: Cell) -> String {
         match self.forts.iter().min_by_key(|f| distance(f.pos, c)) {
             Some(f) if distance(f.pos, c) <= 12 => format!("near {}", f.name),
-            _ => "in open country".into(),
+            _ => match self.map.region_at(c.0) {
+                Some(r) => format!("in {}", r.name),
+                None => "in open country".into(),
+            },
         }
     }
 
     /// Cells for army `i`'s line: across the valley's rows, center first, with extra
     /// ranks behind (toward home) if the ground runs out.
     fn line_cells(&self, i: usize) -> Vec<Cell> {
-        use crate::army::COMPANIES_PER_CELL;
         let a = &self.armies[i];
-        let need = a.companies().div_ceil(COMPANIES_PER_CELL) as usize;
-        let men_per_cell = (COMPANIES_PER_CELL * MEN_PER_COMPANY).min(a.men);
+        let companies = a.companies();
         let blocked = self.enemy_cells(a.side);
+        // A line stays on its own side of any wall.
+        let fort = self.fort_at(a.pos).map(|f| f.id);
         let ok = |c: Cell| {
-            !blocked.contains(&c) && crate::path::enter_cost(&self.map, c, men_per_cell, self.weather).is_some()
+            !blocked.contains(&c)
+                && crate::path::enter_cost(&self.map, c, a.men, self.weather).is_some()
+                && self.fort_at(c).map(|f| f.id) == fort
         };
+        // Enough cells to hold everyone; woods hold fewer than open ground.
+        let full = |cells: &[Cell]| cells.iter().map(|&c| room(&self.map, c)).sum::<u32>() >= companies;
+        let fill = |candidates: Vec<Cell>| {
+            let mut cells = Vec::new();
+            for c in candidates {
+                if full(&cells) {
+                    break;
+                }
+                cells.push(c);
+            }
+            cells
+        };
+        if let Some(f) = self.fort_at(a.pos) {
+            // Behind walls, men spread out to man them, nearest first.
+            let mut cells: Vec<Cell> = (-1..=1)
+                .flat_map(|dy| (-2..=2).map(move |dx| (f.pos.0 + dx, f.pos.1 + dy)))
+                .filter(|&c| ok(c))
+                .collect();
+            cells.sort_by_key(|&c| (c != a.pos, distance(c, a.pos), (c.1 - a.pos.1).abs(), c.0, c.1));
+            return fill(cells);
+        }
         let rear = if a.side == crate::Side::West { -1 } else { 1 };
         let mut cells = vec![a.pos];
         for rank in 0..MAX_RANKS {
@@ -131,14 +157,14 @@ impl Sim {
                 cells.push((x, a.pos.1));
             }
             let (mut up, mut down) = (a.pos.1, a.pos.1);
-            while cells.len() < need {
+            while !full(&cells) {
                 let mut grew = false;
                 if ok((x, up - 1)) {
                     up -= 1;
                     cells.push((x, up));
                     grew = true;
                 }
-                if cells.len() < need && ok((x, down + 1)) {
+                if !full(&cells) && ok((x, down + 1)) {
                     down += 1;
                     cells.push((x, down));
                     grew = true;
@@ -147,12 +173,11 @@ impl Sim {
                     break;
                 }
             }
-            if cells.len() >= need {
+            if full(&cells) {
                 break;
             }
         }
-        cells.truncate(need);
-        cells
+        fill(cells)
     }
 
     /// Armies that have stood still long enough deploy into line, if there's reason
@@ -254,7 +279,7 @@ impl Sim {
     pub(crate) fn fight(&mut self) {
         let minute = self.clock.minute;
         let n = self.armies.len();
-        let columns: Vec<Vec<(Cell, u32)>> = self.armies.iter().map(|a| a.column()).collect();
+        let columns: Vec<Vec<(Cell, u32)>> = self.armies.iter().map(|a| a.column(&self.map)).collect();
         let idx = |(x, y): Cell| (y * MAP_W + x) as usize;
         let mut grid: Vec<Vec<usize>> = vec![Vec::new(); (MAP_W * MAP_H) as usize];
         for (i, col) in columns.iter().enumerate() {
@@ -364,10 +389,14 @@ impl Sim {
             if self.map.terrain(c.0, c.1) == Terrain::River {
                 d = d * 60 / 100; // striking from a bridge: a cramped front
             }
-            if self.map.terrain(nb.0, nb.1) == Terrain::Forest {
-                d = d * 60 / 100; // defenders in the trees
-            }
-            d = d * (100 - 40 * b.entrench as u32 / ENTRENCH_MAX as u32) / 100;
+            d = match self.map.terrain(nb.0, nb.1) {
+                Terrain::Forest | Terrain::Mountain => d * 60 / 100, // defenders in the trees or the rocks
+                Terrain::Hill => d * 80 / 100,                       // striking uphill
+                _ => d,
+            };
+            // Fort walls are as good as the deepest earthworks.
+            let cover = if self.map.terrain(nb.0, nb.1) == Terrain::Fort { ENTRENCH_MAX } else { b.entrench };
+            d = d * (100 - 40 * cover as u32 / ENTRENCH_MAX as u32) / 100;
             if b.routing() {
                 d *= 2; // cutting down men who've turned their backs
             }
