@@ -1,8 +1,9 @@
 use bivouac_sim::rng::hash2;
-use bivouac_sim::{ArmyState, Cell, FortKind, MAP_H, MAP_W, Seen, Sim, Terrain};
+use bivouac_sim::convoy::WAGONS;
+use bivouac_sim::{ArmyState, Cell, Convoy, FortKind, MAP_H, MAP_W, Seen, Sim, Terrain};
 use macroquad::prelude::*;
 
-use crate::app::{App, Layout};
+use crate::app::{App, Layout, Selection};
 use crate::grid::{DENSITY, Grid, braille_char};
 use crate::light::Light;
 use crate::palette::{self, alpha, mix, rgb, scale};
@@ -70,6 +71,7 @@ pub fn draw(g: &Grid, l: &Layout, app: &App, sim: &Sim, light: &Light, t: f32) {
         }
         draw_rumors(g, &v, app, sim, t);
     }
+    draw_convoys(g, &v, l, app, sim, light, t);
     draw_armies(g, &v, l, app, sim, light, t);
     draw_clashes(g, &v, app, sim, t);
 
@@ -345,6 +347,79 @@ fn draw_armies(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Lig
                 }
             }
         }
+    }
+}
+
+/// Supply trains: covered wagons strung along the road, laden ones pale and full,
+/// empty ones going home drawn as bare frames.
+fn draw_convoys(g: &Grid, v: &View, l: &Layout, app: &App, sim: &Sim, light: &Light, t: f32) {
+    for c in sim.convoys.iter().filter(|c| c.on_the_road()) {
+        if !v.visible(c.pos.0, l.cols + 4) || !app.sees_convoy(sim, c) {
+            continue;
+        }
+        let side = palette::side(c.side);
+        let cover = light.lit_bright(mix(rgb(0.86, 0.80, 0.64), side, 0.3));
+        let laden = c.load() > 0;
+        let cells = c.cells();
+        let per = WAGONS.div_ceil(cells.len() as u32);
+        let mut spans: Vec<Span> = Vec::new();
+        for &(x, y) in &cells {
+            spans.push(match sim.map.road_span(x, y) {
+                Some(((x0, y0), (x1, y1))) => {
+                    let at = |x: f32, y: f32| vec2(v.px(0) + x * g.cw, v.py(y));
+                    (at(x0, y0), at(x1, y1))
+                }
+                None => (vec2(v.px(x), v.py(y as f32 + 0.5)), vec2(v.px(x + 1), v.py(y as f32 + 0.5))),
+            });
+        }
+        let jolt = (t * 6.0 + c.id as f32).sin() * 0.6;
+        for &(p0, p1) in &spans {
+            let along = p1 - p0;
+            let band = mix(Color::new(0.03, 0.03, 0.04, 1.0), side, 0.12);
+            draw_line(p0.x, p0.y, p1.x, p1.y, g.ch * 0.45, band);
+            let dir = along.normalize_or(vec2(1.0, 0.0));
+            let up = vec2(dir.y, -dir.x).normalize_or(vec2(0.0, -1.0));
+            let len = along.length() / per as f32;
+            for k in 0..per {
+                let mid = p0 + along * ((k as f32 + 0.5) / per as f32) + up * jolt;
+                let half = dir * len * 0.34;
+                let (a, b) = (mid - half, mid + half);
+                if laden {
+                    draw_line(a.x, a.y, b.x, b.y, g.ch * 0.26, cover);
+                } else {
+                    let h = up * g.ch * 0.1;
+                    draw_line(a.x + h.x, a.y + h.y, b.x + h.x, b.y + h.y, 1.2, scale(cover, 0.7));
+                    draw_line(a.x - h.x, a.y - h.y, b.x - h.x, b.y - h.y, 1.2, scale(cover, 0.7));
+                }
+                let r = (g.cw * 0.07).max(1.0);
+                for w in [a + dir * len * 0.08, b - dir * len * 0.08] {
+                    let w = w - up * g.ch * 0.16;
+                    draw_circle(w.x, w.y, r, light.lit_bright(PLANKS));
+                }
+            }
+        }
+        if app.selected == Some(Selection::Convoy(c.id)) {
+            let white = Color::new(1.0, 1.0, 1.0, 0.5 + 0.4 * (t * 4.0).sin());
+            for &(p0, p1) in &spans {
+                let h = g.ch * 0.42;
+                draw_line(p0.x, p0.y - h, p1.x, p1.y - h, 1.5, white);
+                draw_line(p0.x, p0.y + h, p1.x, p1.y + h, 1.5, white);
+            }
+            if c.side == app.player {
+                draw_route(g, v, sim, c, alpha(side, 0.6));
+            }
+        }
+    }
+}
+
+/// The road a train will take, as a row of dots to a ring at its destination.
+fn draw_route(g: &Grid, v: &View, sim: &Sim, c: &Convoy, mark: Color) {
+    let on_ground = |(x, y): Cell| v.py(sim.map.road_line_y(x, y).unwrap_or(y as f32 + 0.5));
+    for &p in c.path.iter().step_by(2) {
+        draw_circle(v.px(p.0) + g.cw * 0.5, on_ground(p), 1.5, mark);
+    }
+    if let Some(&p) = c.path.back() {
+        draw_circle_lines(v.px(p.0) + g.cw * 0.5, on_ground(p), g.cw * 0.45, 1.5, mark);
     }
 }
 

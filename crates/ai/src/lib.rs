@@ -1,7 +1,7 @@
 //! The computer opponent. It plays through the same [`Order`]s a human sends, sees
 //! only what its own side has detected, and is asked for orders once per tick.
 
-use bivouac_sim::{ArmyState, Order, Seen, Side, Sim, Stance};
+use bivouac_sim::{ArmyState, FortKind, Order, Seen, Side, Sim, Stance};
 
 /// Placeholder strategy: every half hour, keep armies aggressive, rest the tired ones
 /// and march idle ones on the nearest fort their side doesn't hold. Real planning (front strategy, raids,
@@ -13,7 +13,7 @@ pub fn think(sim: &Sim, side: Side) -> Vec<Order> {
     if !sim.clock.minute.is_multiple_of(30) {
         return Vec::new();
     }
-    let mut orders = Vec::new();
+    let mut orders = supply(sim, side);
     // Raise new cohorts from swelling garrisons.
     for f in sim.forts.iter().filter(|f| f.owner == Some(side) && f.garrison >= MUSTER_AT) {
         orders.push(Order::Muster { fort: f.id, men: MUSTER_MEN });
@@ -58,6 +58,25 @@ pub fn think(sim: &Sim, side: Side) -> Vec<Order> {
     orders
 }
 
+/// Keeps stores flowing toward the front: a chain of wagon routes from the capital
+/// through each held fort to the next one closer to the enemy.
+fn supply(sim: &Sim, side: Side) -> Vec<Order> {
+    let Some(capital) = sim.forts.iter().find(|f| f.kind == FortKind::Main && f.owner == Some(side)) else {
+        return Vec::new();
+    };
+    let mut held: Vec<_> = sim.forts.iter().filter(|f| f.owner == Some(side)).collect();
+    held.sort_by_key(|f| ((f.pos.0 - capital.pos.0).abs(), f.id));
+    let mut orders = Vec::new();
+    for pair in held.windows(2) {
+        let (from, to) = (pair[0].id, pair[1].id);
+        match sim.route_from(from) {
+            Some(r) if r.to == to || r.recalled => {}
+            _ => orders.push(Order::Supply { from, to }),
+        }
+    }
+    orders
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +95,9 @@ mod tests {
         }
         for e in sim.log.iter().rev() {
             println!("day {} {} {}", e.minute / 1440, bivouac_sim::clock::hhmm(e.minute), e.text);
+        }
+        for c in &sim.convoys {
+            println!("convoy {} {:?} {}→{} leg {:?} at {:?} delivered {}", c.name, c.side, c.from, c.to, c.leg, c.pos, c.delivered);
         }
         for a in &sim.armies {
             let path_end = a.path.back();

@@ -210,7 +210,14 @@ Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowl
 
 - Every army eats food every tick. Marching eats more than resting **[proposed]**.
 - Armies carry a limited number of days of food. They refill at depots or from supply wagons **[proposed]**.
-- **Supply wagons** travel the roads from depots to forts or armies on routes the player sets. They can be **intercepted**, which is the main target for small hidden raiding groups **[proposed]**.
+- **Supply wagons** travel the roads from depots to forts or armies on routes the player sets. They can be **intercepted**, which is the main target for small hidden raiding groups **[decided]**. Built so far:
+  - **Routes** are standing: select a fort you hold, right-click another, and a train shuttles between them until recalled (`X`). One route leaves each fort; a new order redirects it. Chain forts to move stores up the valley. Fort-to-army routes are **[proposed]**.
+  - A train carries up to 1000 rations, leaving the source 3 days of food for its garrison. It loads and unloads for 30 minutes, waits while there's nothing to send, and moves on roads only, slower than an army (20 min a cell, 30 in mud). It can't push past an enemy army.
+  - **Raiding:** an enemy army next to the wagons takes them. The raiders keep what food they can carry and burn the rest, and it's public news. An escort (any friendly army beside the wagons) or a garrisoned fort keeps them safe. A lost train is rebuilt at the source after 12 hours.
+  - Wagons are seen whenever they're in sight: no dice. Right-click them with an army to run them down. Aggressive armies go after wagons they see within 6 cells.
+  - If a fort at either end falls, the train turns for whichever end is still held, unloads and disbands.
+  - The AI chains routes from its capital through each fort it holds toward the front.
+- `D` detaches a 150-man party (the forest limit); shift+`D` divides in half. Detachments keep their parent's morale and stance.
 - Foraging: armies in fields can scrape up a little food, which drains the land **[open]**.
 
 ## 10. Forts

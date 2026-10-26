@@ -128,10 +128,29 @@ impl Fort {
         got
     }
 
-    pub(crate) fn add(&mut self, goods: [u32; 3]) {
-        for (g, n) in goods.into_iter().enumerate() {
-            let room = self.capacity().saturating_sub(self.total_stores());
-            self.stores[g] += n.min(room);
+    /// Like [`Fort::take`], but keeps track of which goods were taken.
+    pub(crate) fn take_goods(&mut self, mut want: u32) -> [u32; 3] {
+        let mut got = [0; 3];
+        for g in [CHEESE, GRAIN, PORK] {
+            got[g] = want.min(self.stores[g]);
+            self.stores[g] -= got[g];
+            want -= got[g];
         }
+        got
+    }
+
+    pub fn room(&self) -> u32 {
+        self.capacity().saturating_sub(self.total_stores())
+    }
+
+    /// Stores what fits and hands back what doesn't.
+    pub(crate) fn add(&mut self, goods: [u32; 3]) -> [u32; 3] {
+        let mut left = [0; 3];
+        for (g, n) in goods.into_iter().enumerate() {
+            let fits = n.min(self.room());
+            self.stores[g] += fits;
+            left[g] = n - fits;
+        }
+        left
     }
 }

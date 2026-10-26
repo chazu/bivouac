@@ -119,7 +119,7 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
         map,
         forts,
         armies,
-        // Day 14, late afternoon: a blood moon rises at dusk.
+        // Day 1, late afternoon: a blood moon rises at dusk.
         clock: Clock { minute: 17 * 60 },
         weather: Weather::Clear,
         wind: -1,
@@ -132,8 +132,10 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
         raised: [2, 0],
         intel: Default::default(),
         tracks: Vec::new(),
+        convoys: Vec::new(),
         winner: None,
         rng: Rng::new(seed),
         next_army_id: 6,
+        next_convoy_id: 1,
     }
 }

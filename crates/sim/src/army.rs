@@ -78,6 +78,8 @@ pub struct Army {
     pub entrench: u16,
     /// Enemy army this one is attacking or chasing.
     pub target: Option<u32>,
+    /// Enemy supply train this one is running down.
+    pub quarry: Option<u32>,
     /// Minutes of rout left before the army rallies.
     pub rout_left: u32,
     /// Casualties not yet taken, in thousandths of a man.
@@ -109,6 +111,7 @@ impl Army {
             stance: Stance::Defensive,
             entrench: 0,
             target: None,
+            quarry: None,
             rout_left: 0,
             bleed: 0,
             line: Vec::new(),

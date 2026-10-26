@@ -28,10 +28,10 @@ const FLANK_MORALE: u32 = 150;
 const MORALE_RECOVERY: u32 = 60;
 /// Most companies a garrison can bring to bear at once.
 const GARRISON_FRONT: u32 = 16;
-const AGGRO_RANGE: i32 = 4;
+pub(crate) const AGGRO_RANGE: i32 = 4;
 const EVADE_RANGE: i32 = 4;
 const PURSUIT_RANGE: i32 = 6;
-const RETARGET_EVERY: u32 = 10;
+pub(crate) const RETARGET_EVERY: u32 = 10;
 /// A fight between the same two armies within this many minutes isn't announced again.
 const ANNOUNCE_AGAIN_AFTER: u32 = 120;
 pub const ENTRENCH_PER_MINUTE: u16 = 3;

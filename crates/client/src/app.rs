@@ -1,4 +1,5 @@
-use bivouac_sim::{Army, Cell, MAP_H, MAP_W, Order, Seen, Side, Sim};
+use bivouac_sim::path::FOREST_CAP;
+use bivouac_sim::{Army, Cell, Convoy, MAP_H, MAP_W, Order, Seen, Side, Sim};
 use macroquad::prelude::*;
 
 use crate::grid::Grid;
@@ -57,6 +58,7 @@ impl Layout {
 pub enum Selection {
     Army(u32),
     Fort(u32),
+    Convoy(u32),
 }
 
 pub struct App {
@@ -108,6 +110,18 @@ impl App {
     /// Whether the player can currently see an army where it actually stands.
     pub fn in_view(&self, sim: &Sim, a: &Army) -> bool {
         self.seen(sim, a).is_some_and(|s| s >= Seen::Sighted)
+    }
+
+    /// Whether the player can see a supply train.
+    pub fn sees_convoy(&self, sim: &Sim, c: &Convoy) -> bool {
+        !c.lost() && (self.reveal || sim.sees_convoy(self.player, c))
+    }
+
+    /// Visible supply trains out on the road with a wagon in cell `cell`.
+    pub fn convoys_at<'a>(&self, sim: &'a Sim, cell: Cell) -> impl Iterator<Item = &'a Convoy> {
+        let seen: Vec<&'a Convoy> =
+            sim.convoys.iter().filter(|c| c.on_the_road() && self.sees_convoy(sim, c)).collect();
+        seen.into_iter().filter(move |c| c.cells().contains(&cell))
     }
 
     /// Whether a cell is inside the player's current field of view.
@@ -189,24 +203,34 @@ impl App {
         {
             self.select_at(sim, c);
         }
+        let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         if is_mouse_button_pressed(MouseButton::Right)
             && let (Some(to), Some(Selection::Army(army))) = (self.hover, self.selected)
         {
-            // Right-clicking an enemy attacks it; anywhere else is a march.
+            // Right-clicking an enemy attacks it, enemy wagons are raided, anywhere else is a march.
             let side = sim.army(army).map(|a| a.side);
             let enemy = sim
                 .armies
                 .iter()
                 .find(|a| Some(a.side) != side && a.occupies(to) && self.in_view(sim, a))
                 .map(|a| a.id);
+            let wagons = self.convoys_at(sim, to).find(|c| Some(c.side) != side).map(|c| c.id);
             // Shift adds a waypoint, to steer the march along a chosen road.
-            let queue = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-            let order = match enemy {
-                Some(target) => Order::Attack { army, target },
-                None if queue => Order::Waypoint { army, to },
-                None => Order::March { army, to },
+            let order = match (enemy, wagons) {
+                (Some(target), _) => Order::Attack { army, target },
+                (None, Some(convoy)) => Order::Raid { army, convoy },
+                _ if shift => Order::Waypoint { army, to },
+                _ => Order::March { army, to },
             };
             self.order(sim, order);
+        }
+        // From a selected fort, right-clicking another of yours sets up a supply route.
+        if is_mouse_button_pressed(MouseButton::Right)
+            && let (Some(c), Some(Selection::Fort(from))) = (self.hover, self.selected)
+            && let Some(to) = sim.fort_at(c).map(|f| f.id)
+            && to != from
+        {
+            self.order(sim, Order::Supply { from, to });
         }
 
         if self.intro {
@@ -240,6 +264,11 @@ impl App {
             self.selected = None;
             self.help = false;
         }
+        if let Some(Selection::Fort(from)) = self.selected
+            && is_key_pressed(KeyCode::X)
+        {
+            self.order(sim, Order::CancelSupply { from });
+        }
         if let Some(Selection::Fort(fort)) = self.selected
             && is_key_pressed(KeyCode::M)
         {
@@ -263,7 +292,8 @@ impl App {
             } else if is_key_pressed(KeyCode::H) {
                 Some(Order::Hold { army })
             } else if is_key_pressed(KeyCode::D) {
-                Some(Order::Divide { army })
+                // A raiding party small enough for the forests, or with shift, half.
+                Some(Order::Divide { army, men: if shift { None } else { Some(FOREST_CAP) } })
             } else if is_key_pressed(KeyCode::J) {
                 Some(Order::Join { army })
             } else if is_key_pressed(KeyCode::G) {
@@ -278,9 +308,12 @@ impl App {
             }
         }
         // Drop a selection that's gone: destroyed, or an enemy that slipped out of view.
-        if let Some(Selection::Army(id)) = self.selected
-            && sim.army(id).is_none_or(|a| !self.in_view(sim, a))
-        {
+        let gone = match self.selected {
+            Some(Selection::Army(id)) => sim.army(id).is_none_or(|a| !self.in_view(sim, a)),
+            Some(Selection::Convoy(id)) => sim.convoy(id).is_none_or(|c| !self.sees_convoy(sim, c)),
+            _ => false,
+        };
+        if gone {
             self.selected = None;
         }
     }
@@ -291,11 +324,12 @@ impl App {
         }
     }
 
-    /// Clicking a cell cycles through the armies in it (yours first), then the fort.
+    /// Clicking a cell cycles through the armies in it (yours first), wagons, then the fort.
     fn select_at(&mut self, sim: &Sim, c: Cell) {
         let mut here: Vec<&Army> = sim.armies.iter().filter(|a| a.occupies(c) && self.in_view(sim, a)).collect();
         here.sort_by_key(|a| (a.side != self.player, a.id));
         let mut choices: Vec<Selection> = here.iter().map(|a| Selection::Army(a.id)).collect();
+        choices.extend(self.convoys_at(sim, c).map(|w| Selection::Convoy(w.id)));
         if let Some(f) = sim.fort_at(c) {
             choices.push(Selection::Fort(f.id));
         }

@@ -5,6 +5,7 @@
 pub mod army;
 pub mod clock;
 pub mod combat;
+pub mod convoy;
 pub mod fort;
 pub mod intel;
 pub mod map;
@@ -17,6 +18,7 @@ use std::collections::VecDeque;
 pub use army::{Army, ArmyState, Stance};
 pub use clock::{Clock, Weather};
 pub use combat::Clash;
+pub use convoy::{Convoy, Leg};
 pub use fort::{Extra, Fort, FortKind};
 pub use intel::{Intel, Report, Seen, Track};
 pub use map::{MAP_H, MAP_W, Map, Road, Terrain};
@@ -71,9 +73,10 @@ pub enum Order {
     Hold {
         army: u32,
     },
-    /// Split off half the army into a new one in the same cell.
+    /// Split off `men` (half the army if `None`) into a new one in the same cell.
     Divide {
         army: u32,
+        men: Option<u32>,
     },
     /// Merge every friendly army standing in the same cell into this one.
     Join {
@@ -96,6 +99,21 @@ pub enum Order {
     Muster {
         fort: u32,
         men: u32,
+    },
+    /// Run supply wagons from fort `from` to fort `to` until told otherwise.
+    /// A fort sends out one route; ordering another redirects it.
+    Supply {
+        from: u32,
+        to: u32,
+    },
+    /// Call off the route out of fort `from`.
+    CancelSupply {
+        from: u32,
+    },
+    /// Run down an enemy supply train and take it.
+    Raid {
+        army: u32,
+        convoy: u32,
     },
 }
 
@@ -144,8 +162,11 @@ pub struct Sim {
     intel: [Intel; 2],
     /// Footprints, newest last. They fade with time; rain makes them last.
     pub tracks: Vec<Track>,
+    /// Supply trains, one per route.
+    pub convoys: Vec<Convoy>,
     rng: Rng,
     next_army_id: u32,
+    next_convoy_id: u32,
 }
 
 /// Logs news everyone hears (battles, captures, weather).
@@ -221,17 +242,21 @@ impl Sim {
     }
 
     pub fn apply(&mut self, side: Side, order: Order) -> Result<(), &'static str> {
-        if let Order::Muster { fort, men } = order {
-            return self.muster(side, fort, men);
+        match order {
+            Order::Muster { fort, men } => return self.muster(side, fort, men),
+            Order::Supply { from, to } => return self.supply(side, from, to),
+            Order::CancelSupply { from } => return self.cancel_supply(side, from),
+            _ => {}
         }
         let id = match order {
-            Order::Muster { .. } => unreachable!("handled above"),
+            Order::Muster { .. } | Order::Supply { .. } | Order::CancelSupply { .. } => unreachable!("handled above"),
             Order::March { army, .. }
             | Order::Waypoint { army, .. }
             | Order::Rest { army }
             | Order::Hold { army }
-            | Order::Divide { army }
+            | Order::Divide { army, .. }
             | Order::Join { army }
+            | Order::Raid { army, .. }
             | Order::Attack { army, .. }
             | Order::SetStance { army, .. }
             | Order::Garrison { army } => army,
@@ -262,6 +287,7 @@ impl Sim {
                 a.path = path.into();
                 a.progress = 0;
                 a.target = None;
+                a.quarry = None;
                 a.form_line = false;
                 a.state = if a.path.is_empty() { ArmyState::Holding } else { ArmyState::Marching };
             }
@@ -278,6 +304,7 @@ impl Sim {
                 a.path.clear();
                 a.progress = 0;
                 a.target = None;
+                a.quarry = None;
                 a.state = if matches!(order, Order::Rest { .. }) { ArmyState::Resting } else { ArmyState::Holding };
                 // Holding means standing to in line of battle.
                 a.form_line = matches!(order, Order::Hold { .. });
@@ -291,10 +318,25 @@ impl Sim {
                     return Err("you can't see that army");
                 }
                 self.armies[i].target = Some(target);
+                self.armies[i].quarry = None;
                 // The chase itself is steered each minute by `behave`.
                 self.armies[i].path.clear();
             }
-            Order::Muster { .. } => unreachable!("handled above"),
+            Order::Raid { convoy, .. } => {
+                let c = self.convoy(convoy).ok_or("no such convoy")?;
+                if c.side == side {
+                    return Err("those are your own wagons");
+                }
+                if !self.sees_convoy(side, c) {
+                    return Err("you can't see those wagons");
+                }
+                let a = &mut self.armies[i];
+                a.quarry = Some(convoy);
+                a.target = None;
+                // Steered each minute by `hunt_convoys`.
+                a.path.clear();
+            }
+            Order::Muster { .. } | Order::Supply { .. } | Order::CancelSupply { .. } => unreachable!("handled above"),
             Order::SetStance { stance, .. } => {
                 self.armies[i].stance = stance;
             }
@@ -313,18 +355,20 @@ impl Sim {
                 self.armies.remove(i);
                 self.note(Some(side), text);
             }
-            Order::Divide { .. } => {
+            Order::Divide { men, .. } => {
                 let a = &self.armies[i];
                 if a.men < 2 * MEN_PER_COMPANY {
                     return Err("too few men to divide");
                 }
-                let split = a.men / 2;
+                let split = men.unwrap_or(a.men / 2).clamp(MEN_PER_COMPANY, a.men - MEN_PER_COMPANY);
                 let food = a.food * split as u64 / a.men as u64;
                 let pos = a.pos;
                 let name = self.new_army_name(side);
                 let a = &self.armies[i];
                 let mut d = Army::new(self.next_army_id, side, &name, split, pos);
                 d.stamina = a.stamina;
+                d.morale = a.morale;
+                d.stance = a.stance;
                 d.food = food;
                 self.next_army_id += 1;
                 let a = &mut self.armies[i];
@@ -408,7 +452,10 @@ impl Sim {
         self.clock.minute += 1;
         let m = self.clock.minute_of_day();
         self.behave();
+        self.hunt_convoys();
         self.move_armies();
+        self.run_convoys();
+        self.raid_convoys();
         self.fight();
         self.reveal_contacts();
         if self.clock.minute.is_multiple_of(intel::DETECT_EVERY) {
@@ -636,6 +683,11 @@ impl Sim {
                 mix(v);
             }
             for v in [a.progress as u64, a.morale as u64, a.entrench as u64, a.state as u64, a.line.len() as u64] {
+                mix(v);
+            }
+        }
+        for c in &self.convoys {
+            for v in [c.id as u64, c.pos.0 as u64, c.pos.1 as u64, c.progress as u64, c.load() as u64, c.to as u64] {
                 mix(v);
             }
         }
@@ -954,7 +1006,7 @@ mod tests {
     #[test]
     fn own_movements_stay_out_of_the_enemy_log() {
         let mut sim = Sim::new(SEED);
-        sim.apply(Side::West, Order::Divide { army: 1 }).unwrap();
+        sim.apply(Side::West, Order::Divide { army: 1, men: None }).unwrap();
         let entry = &sim.log[0];
         assert!(entry.visible_to(Side::West));
         assert!(!entry.visible_to(Side::East));
@@ -1002,7 +1054,7 @@ mod tests {
     fn divide_then_join_round_trips() {
         let mut sim = Sim::new(SEED);
         let before = sim.army(1).unwrap().men;
-        sim.apply(Side::West, Order::Divide { army: 1 }).unwrap();
+        sim.apply(Side::West, Order::Divide { army: 1, men: None }).unwrap();
         assert_eq!(sim.armies.len(), 6);
         sim.apply(Side::West, Order::Join { army: 1 }).unwrap();
         assert_eq!(sim.armies.len(), 5);

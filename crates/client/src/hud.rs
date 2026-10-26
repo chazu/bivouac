@@ -1,6 +1,6 @@
 use bivouac_sim::clock::{FULL_MOON, hhmm, moon_phase_name};
 use bivouac_sim::path::FOREST_CAP;
-use bivouac_sim::{Army, ArmyState, Cell, Fort, MAP_W, Seen, Side, Sim, Terrain};
+use bivouac_sim::{Army, ArmyState, Cell, Convoy, Fort, Leg, MAP_W, Seen, Side, Sim, Terrain};
 use macroquad::prelude::*;
 
 use crate::app::{App, Layout, Selection};
@@ -95,9 +95,12 @@ fn help(g: &Grid, l: &Layout) {
             ("  +shift         add a waypoint, to steer along a road", TEXT),
             ("R / H            rest / halt in line of battle", TEXT),
             ("Q                cycle stance: aggressive, defensive, evasive", TEXT),
-            ("D / J            divide in half / join armies in the same cell", TEXT),
+            ("D / shift+D      detach a 150-man raiding party / divide in half", TEXT),
+            ("J                join armies in the same cell", TEXT),
             ("G                put the army into the garrison of your fort", TEXT),
             ("M                (fort selected) muster 400 men from its garrison", TEXT),
+            ("right-click fort (fort selected) run supply wagons there; X recalls", TEXT),
+            ("right-click wagons (army selected) raid an enemy supply train", TEXT),
             ("Tab / C          next army / center on it", TEXT),
             ("← → / wheel      scroll; click the minimap to jump", TEXT),
             ("S                collapse or expand the sky", TEXT),
@@ -246,6 +249,9 @@ fn minimap(g: &Grid, l: &Layout, app: &App, sim: &Sim) {
     }
     for f in &sim.forts {
         g.put(col_of(f.pos.0), top, '■', palette::side_or_stone(f.owner));
+    }
+    for c in sim.convoys.iter().filter(|c| c.on_the_road() && app.sees_convoy(sim, c)) {
+        g.put(col_of(c.pos.0), top, '▪', palette::alpha(palette::side(c.side), 0.7));
     }
     for a in sim.armies.iter().filter(|a| a.side == app.player || app.reveal) {
         g.put(col_of(a.pos.0), top, '•', palette::side(a.side));
@@ -433,6 +439,55 @@ fn hover_column(pen: &mut Pen, app: &App, sim: &Sim) {
     if here.len() > 3 {
         pen.line(&format!("  …and {} more", here.len() - 3), DIM);
     }
+    for c in app.convoys_at(sim, c).take(2) {
+        pen.gap();
+        let who = if c.side == app.player { "yours" } else { "enemy" };
+        let load = if c.load() > 0 { "laden" } else { "empty" };
+        pen.segs(&[("▬ ", palette::side(c.side)), (&format!("{} ({who})", c.name), TEXT), (&format!("  {load}"), DIM)]);
+    }
+}
+
+fn fort_name(sim: &Sim, id: u32) -> &'static str {
+    sim.forts.iter().find(|f| f.id == id).map_or("?", |f| f.name)
+}
+
+/// What a train is up to, in a few words.
+fn convoy_doing(c: &Convoy, sim: &Sim) -> String {
+    let eta = || duration(sim.convoy_eta(c));
+    match c.leg {
+        Leg::Lost { until } => format!("lost; a new train in {}", duration(until - sim.clock.minute)),
+        _ if c.recalled => format!("recalled → {}  ·  ETA {}", fort_name(sim, c.heading), eta()),
+        Leg::Loading(_) => format!("loading at {}", fort_name(sim, c.from)),
+        Leg::Outbound => format!("→ {}  ·  ETA {}", fort_name(sim, c.to), eta()),
+        Leg::Unloading(_) => format!("unloading at {}", fort_name(sim, c.to)),
+        Leg::Returning => format!("returning → {}  ·  ETA {}", fort_name(sim, c.from), eta()),
+    }
+}
+
+fn convoy_detail(pen: &mut Pen, c: &Convoy, app: &App, sim: &Sim) {
+    pen.segs(&[("SELECTED  ", HEADING), (&c.name, palette::side(c.side))]);
+    let names = bivouac_sim::fort::GOODS;
+    let cargo: Vec<String> = names.iter().zip(c.cargo).filter(|(_, n)| *n > 0).map(|(g, n)| format!("{g} {n}")).collect();
+    if c.side != app.player {
+        pen.line("Enemy supply wagons.", DIM);
+        pen.segs(&[("cargo    ", DIM), (if c.load() > 0 { "laden" } else { "empty, going home" }, TEXT)]);
+        pen.line("Select an army and right-click the wagons to raid them.", DIM);
+        pen.line("Raiders keep what food they can carry and burn the rest.", DIM);
+        return;
+    }
+    pen.segs(&[("route    ", DIM), (&format!("{} → {}", fort_name(sim, c.from), fort_name(sim, c.to)), TEXT)]);
+    let load = if cargo.is_empty() { "empty".to_string() } else { format!("{}  ({})", c.load(), cargo.join(", ")) };
+    pen.segs(&[("cargo    ", DIM), (&load, TEXT)]);
+    pen.segs(&[("status   ", DIM), (&convoy_doing(c, sim), TEXT)]);
+    pen.segs(&[("carried  ", DIM), (&format!("{} rations delivered", c.delivered), TEXT)]);
+    let exposure = if sim.sees_convoy(c.side.other(), c) && c.on_the_road() {
+        ("in sight of the enemy", AMBER)
+    } else {
+        ("unseen by the enemy", rgb(0.55, 0.85, 0.55))
+    };
+    pen.segs(&[("exposure ", DIM), exposure]);
+    pen.line("Wagons can't fight: an army beside them keeps them safe.", DIM);
+    pen.line("Select the source fort and press [X] to recall.", DIM);
 }
 
 fn selected_column(pen: &mut Pen, app: &App, sim: &Sim) {
@@ -445,6 +500,11 @@ fn selected_column(pen: &mut Pen, app: &App, sim: &Sim) {
         Some(Selection::Fort(id)) => {
             if let Some(f) = sim.forts.iter().find(|f| f.id == id) {
                 fort_detail(pen, f, app, sim);
+            }
+        }
+        Some(Selection::Convoy(id)) => {
+            if let Some(c) = sim.convoy(id) {
+                convoy_detail(pen, c, app, sim);
             }
         }
         None => {
@@ -512,7 +572,7 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
         };
         pen.segs(&[("exposure ", DIM), exposure]);
         pen.line("[RMB] march / attack  [R]est [H]old [Q] stance", DIM);
-        pen.line("[D]ivide [J]oin [G]arrison", DIM);
+        pen.line("[D] detach 150 (shift: half) [J]oin [G]arrison", DIM);
     } else {
         pen.line("Enemy army: you can't command it.", DIM);
     }
@@ -561,6 +621,16 @@ fn fort_detail(pen: &mut Pen, f: &Fort, app: &App, sim: &Sim) {
         pen.line(&format!("Being taken by {}: {n}/60 min", side_name(Some(s), app.player)), AMBER);
     }
     if f.owner == Some(app.player) {
+        if let Some(c) = sim.route_from(f.id) {
+            pen.segs(&[("supply   ", DIM), (&format!("{}: {}", c.name, convoy_doing(c, sim)), TEXT)]);
+        }
+        let incoming: Vec<&str> =
+            sim.convoys.iter().filter(|c| c.to == f.id && c.side == app.player).map(|c| fort_name(sim, c.from)).collect();
+        if !incoming.is_empty() {
+            pen.segs(&[("fed by   ", DIM), (&incoming.join(", "), TEXT)]);
+        }
         pen.line(&format!("[M] muster {} men from the garrison", crate::app::MUSTER_MEN.min(f.garrison)), DIM);
+        let recall = if sim.route_from(f.id).is_some() { "  [X] recall wagons" } else { "" };
+        pen.line(&format!("[RMB] another fort: send wagons there{recall}"), DIM);
     }
 }

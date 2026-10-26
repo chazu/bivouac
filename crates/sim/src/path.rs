@@ -28,6 +28,15 @@ pub fn enter_cost(map: &Map, (x, y): Cell, men: u32, weather: Weather) -> Option
     })
 }
 
+/// Game minutes for a wagon to enter a cell: roads and forts only, and mud makes
+/// them crawl.
+pub fn wagon_cost(map: &Map, (x, y): Cell, weather: Weather) -> Option<u32> {
+    if !map.in_bounds(x, y) || !(map.is_road(x, y) || map.terrain(x, y) == Terrain::Fort) {
+        return None;
+    }
+    Some(if weather == Weather::Rain { 30 } else { 20 })
+}
+
 /// Stamina spent entering a cell.
 pub fn stamina_cost(map: &Map, (x, y): Cell, weather: Weather) -> u16 {
     let base = match map.terrain(x, y) {
@@ -50,7 +59,18 @@ pub fn find_path(
     weather: Weather,
     blocked: impl Fn(Cell) -> bool,
 ) -> Option<Vec<Cell>> {
-    enter_cost(map, to, men, weather)?;
+    find_route(map, from, to, |c| enter_cost(map, c, men, weather), blocked)
+}
+
+/// Cheapest route from `from` to `to` (excluding `from`) under any entry cost.
+pub fn find_route(
+    map: &Map,
+    from: Cell,
+    to: Cell,
+    cost: impl Fn(Cell) -> Option<u32>,
+    blocked: impl Fn(Cell) -> bool,
+) -> Option<Vec<Cell>> {
+    cost(to)?;
     if from == to {
         return Some(Vec::new());
     }
@@ -61,7 +81,7 @@ pub fn find_path(
     best[idx(from)] = 0;
     heap.push(Reverse((0u32, from.0, from.1)));
 
-    while let Some(Reverse((cost, x, y))) = heap.pop() {
+    while let Some(Reverse((spent, x, y))) = heap.pop() {
         if (x, y) == to {
             let mut path = vec![to];
             let mut i = idx(to);
@@ -72,17 +92,17 @@ pub fn find_path(
             path.reverse();
             return Some(path);
         }
-        if cost > best[idx((x, y))] {
+        if spent > best[idx((x, y))] {
             continue;
         }
         for (dx, dy) in NEIGHBORS {
             let next = (x + dx, y + dy);
-            let Some(step) = enter_cost(map, next, men, weather) else { continue };
+            let Some(step) = cost(next) else { continue };
             if blocked(next) {
                 continue;
             }
             let step = if dx != 0 && dy != 0 { step * 14 / 10 } else { step };
-            let c = cost + step;
+            let c = spent + step;
             if c < best[idx(next)] {
                 best[idx(next)] = c;
                 came_from[idx(next)] = idx((x, y));
