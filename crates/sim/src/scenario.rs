@@ -34,6 +34,10 @@ fn fort(
     }
 }
 
+/// Men behind each capital's walls at the start: enough that storming them is a
+/// day's bloody work, not an afternoon's.
+const CAPITAL_GARRISON: u32 = 800;
+
 /// The opening scenario: one valley under a dying sun. The Azure Remnant holds
 /// Lantern Gate in the west, the Vermilion Host the Cinnabar Citadel in the east,
 /// and four neutral holdings lie along the Imperial Road between them.
@@ -41,7 +45,7 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
     use Extra::*;
     use FortKind::*;
     let forts = vec![
-        fort(0, "Lantern Gate", Main, 4, Some(Side::West), [3000, 200, 400], vec![Palisade, Granary], 300),
+        fort(0, "Lantern Gate", Main, 4, Some(Side::West), [3000, 200, 400], vec![Palisade, Granary], CAPITAL_GARRISON),
         fort(
             1,
             "Willow Ford Mill",
@@ -55,7 +59,16 @@ pub(crate) fn ashford_valley(seed: u64) -> Sim {
         fort(2, "Nine Wells", Village, 96, None, [400, 80, 0], vec![], 60),
         fort(3, "Crow Pagoda", Keep, 144, None, [600, 0, 150], vec![Watchtower, Palisade], 120),
         fort(4, "Salt Terrace", Mill, 192, None, [900, 40, 300], vec![WaterMill, Smokehouse], 90),
-        fort(5, "Cinnabar Citadel", Main, 235, Some(Side::East), [3000, 200, 400], vec![Palisade, Granary], 300),
+        fort(
+            5,
+            "Cinnabar Citadel",
+            Main,
+            235,
+            Some(Side::East),
+            [3000, 200, 400],
+            vec![Palisade, Granary],
+            CAPITAL_GARRISON,
+        ),
     ];
 
     // The Imperial Road links every fort, wandering between them.

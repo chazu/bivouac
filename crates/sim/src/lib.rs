@@ -229,20 +229,74 @@ impl Sim {
     }
 
     fn plan_path_from(&self, army: &Army, from: Cell, to: Cell) -> Option<Vec<Cell>> {
-        let enemies = self.sighted_enemy_cells(army.side);
-        path::find_path(&self.map, from, to, army.men, self.weather, |c| enemies.contains(&c))
+        let blocked = self.blocked_cells(army.side, from);
+        path::find_path(&self.map, from, to, army.men, self.weather, |c| blocked.contains(&c))
     }
 
     /// Where a march order to `to` would take `army`: there, or if the army can't
-    /// get there (too big for the woods, say), as close as the ground allows.
+    /// get there (too big for the woods, say), as close as the ground allows. A
+    /// march on a fort whose gates are shut goes to the ground before its gates.
     pub fn plan_march(&self, army: &Army, to: Cell) -> Option<Vec<Cell>> {
         self.plan_march_from(army, army.pos, to)
     }
 
     fn plan_march_from(&self, army: &Army, from: Cell, to: Cell) -> Option<Vec<Cell>> {
-        let enemies = self.sighted_enemy_cells(army.side);
+        let blocked = self.blocked_cells(army.side, from);
+        if let Some(f) = self.fort_at(to).filter(|f| f.bars(army.side) && !f.contains(from)) {
+            let mut gates = self.assault_cells(f);
+            gates.sort_by_key(|&c| ((c.0 - from.0).abs().max((c.1 - from.1).abs()), c));
+            let storm = gates
+                .iter()
+                .find_map(|&g| path::find_path(&self.map, from, g, army.men, self.weather, |c| blocked.contains(&c)));
+            if storm.is_some() {
+                return storm;
+            }
+        }
         let cost = |c| path::enter_cost(&self.map, c, army.men, self.weather);
-        path::find_route_near(&self.map, from, to, cost, |c| enemies.contains(&c))
+        path::find_route_near(&self.map, from, to, cost, |c| blocked.contains(&c))
+    }
+
+    /// Cells an army of `side` setting out from `from` must route around: enemies
+    /// it can see, and forts whose gates are shut to it (unless it's already inside).
+    fn blocked_cells(&self, side: Side, from: Cell) -> Vec<Cell> {
+        let mut cells = self.sighted_enemy_cells(side);
+        cells
+            .extend(self.barred_cells(side).into_iter().filter(|&c| self.fort_at(c).is_none_or(|f| !f.contains(from))));
+        cells
+    }
+
+    /// Every cell of every fort whose gates are shut to `side`.
+    fn barred_cells(&self, side: Side) -> Vec<Cell> {
+        self.forts
+            .iter()
+            .filter(|f| f.bars(side))
+            .flat_map(|f| (-2..=2).flat_map(move |dx| (-1..=1).map(move |dy| (f.pos.0 + dx, f.pos.1 + dy))))
+            .collect()
+    }
+
+    /// The ground outside fort `f` right before one of its gates: the only place a
+    /// fort can be stormed from.
+    pub fn assault_cells(&self, f: &Fort) -> Vec<Cell> {
+        let mut cells = Vec::new();
+        for (gx, gy) in (-2..=2).flat_map(|dx| (-1..=1).map(move |dy| (f.pos.0 + dx, f.pos.1 + dy))) {
+            if !self.map.is_gate(gx, gy) {
+                continue;
+            }
+            for (dx, dy) in map::NEIGHBORS {
+                let c = (gx + dx, gy + dy);
+                if self.map.in_bounds(c.0, c.1) && !f.contains(c) && !cells.contains(&c) {
+                    cells.push(c);
+                }
+            }
+        }
+        cells
+    }
+
+    /// Whether blows can pass between neighboring cells `a` and `b`. Walls stop
+    /// them except at a gate.
+    pub(crate) fn blows_pass(&self, a: Cell, b: Cell) -> bool {
+        let (fa, fb) = (self.fort_at(a).map(|f| f.id), self.fort_at(b).map(|f| f.id));
+        fa == fb || ((fa.is_none() || self.map.is_gate(a.0, a.1)) && (fb.is_none() || self.map.is_gate(b.0, b.1)))
     }
 
     fn sighted_enemy_cells(&self, side: Side) -> Vec<Cell> {
@@ -520,6 +574,7 @@ impl Sim {
         let mut laid = Vec::new();
         let mut occupied: Vec<(Side, Cell)> =
             self.armies.iter().flat_map(|a| a.column(&self.map).into_iter().map(move |(c, _)| (a.side, c))).collect();
+        let barred = [self.barred_cells(Side::West), self.barred_cells(Side::East)];
         for a in self.armies.iter_mut() {
             if !matches!(a.state, ArmyState::Marching | ArmyState::Routing) {
                 continue;
@@ -534,8 +589,10 @@ impl Sim {
             if occupied.iter().any(|&(s, c)| s != a.side && c == next) {
                 continue;
             }
-            let cost =
-                path::enter_cost(&self.map, next, a.men, weather).filter(|_| !self.map.crosses_wall(a.pos, next));
+            // A garrisoned fort's gates are shut to its enemies.
+            let shut = barred[a.side.idx()].contains(&next) && !self.forts.iter().any(|f| f.contains(a.pos));
+            let cost = path::enter_cost(&self.map, next, a.men, weather)
+                .filter(|_| !self.map.crosses_wall(a.pos, next) && !shut);
             let Some(cost) = cost else {
                 a.path.clear();
                 a.state = ArmyState::Holding;
@@ -798,7 +855,10 @@ mod tests {
     #[test]
     fn walls_are_passed_only_at_gates() {
         for seed in 0..20 {
-            let sim = Sim::new(seed);
+            let mut sim = Sim::new(seed);
+            for f in &mut sim.forts {
+                f.garrison = 0; // open every gate: this is about the walls
+            }
             let host = sim.army(1).unwrap();
             let mut walked = 0;
             for f in &sim.forts {
@@ -977,6 +1037,42 @@ mod tests {
         assert_eq!(sim.forts[1].owner, Some(Side::West), "the militia should have broken by now");
     }
 
+    #[test]
+    fn a_garrison_shuts_its_gates() {
+        let mut sim = Sim::new(SEED);
+        let f = sim.forts[1].clone();
+        let host = sim.army(1).unwrap();
+        let route = sim.plan_march(host, f.pos).expect("should reach the gates");
+        let end = *route.last().unwrap();
+        assert!(!f.contains(end), "marched into a garrisoned fort");
+        assert!(sim.assault_cells(&f).contains(&end), "stopped at {end:?}, not before a gate");
+        assert!(route.iter().all(|&c| !f.contains(c)), "walked through a shut gate");
+        sim.forts[1].garrison = 0;
+        let host = sim.army(1).unwrap();
+        let route = sim.plan_march(host, f.pos).unwrap();
+        assert_eq!(route.last(), Some(&f.pos), "an empty fort's gates are open");
+    }
+
+    #[test]
+    fn walls_are_stormed_only_at_their_gates() {
+        let mut sim = Sim::new(SEED);
+        sim.armies.retain(|a| a.id == 2);
+        let f = sim.forts[1].clone();
+        let gates = sim.assault_cells(&f);
+        // Up against the wall but away from any gate: shot at, can't strike back.
+        let wall = (-3..=3)
+            .flat_map(|dx| [(f.pos.0 + dx, f.pos.1 - 2), (f.pos.0 + dx, f.pos.1 + 2)])
+            .find(|&c| !gates.contains(&c) && path::enter_cost(&sim.map, c, 640, Weather::Clear).is_some())
+            .expect("open ground along the wall");
+        sim.armies[0].pos = wall;
+        sim.armies[0].state = ArmyState::Resting;
+        for _ in 0..120 {
+            sim.tick();
+        }
+        assert_eq!(sim.forts[1].garrison, 190, "struck the garrison over its wall");
+        assert!(sim.armies[0].men < 640, "the garrison should shoot at men under its walls");
+    }
+
     /// Puts two armies face to face in open ground, away from forts.
     fn duel(west_men: u32, east_men: u32) -> Sim {
         let mut sim = Sim::new(SEED);
@@ -1058,6 +1154,58 @@ mod tests {
                     sim.armies[0].men
                 );
                 break;
+            }
+        }
+    }
+
+    /// Every West man thrown at an undefended Cinnabar Citadel:
+    /// `cargo test -p bivouac-sim siege_report -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn siege_report() {
+        for (men, garrison) in [(2440, 800), (1800, 800), (2440, 1200), (640, 190)] {
+            for seed in 0..3 {
+                let mut sim = Sim::new(seed);
+                sim.armies.retain(|a| a.id == 1);
+                sim.armies[0].men = men;
+                sim.armies[0].pos = sim.map.road_cell(0, 215);
+                sim.forts[5].garrison = garrison;
+                sim.apply(Side::West, Order::March { army: 1, to: sim.forts[5].pos }).unwrap();
+                let mut broke = None;
+                let mut start = 0;
+                for minute in 0..48 * 60 {
+                    sim.tick();
+                    if start == 0 && sim.in_battle(1) {
+                        start = minute;
+                    }
+                    if sim.armies.is_empty() || sim.armies[0].routing() {
+                        println!("{men} vs {garrison} (seed {seed}): the stormers break after {}h", minute / 60);
+                        break;
+                    }
+                    if broke.is_none() && sim.forts[5].garrison == 0 {
+                        broke = Some(minute);
+                        let pos = sim.forts[5].pos;
+                        sim.apply(Side::West, Order::March { army: 1, to: pos }).unwrap();
+                    }
+                    if sim.winner.is_some() {
+                        let (b, minute) = (broke.unwrap() - start, minute - start);
+                        println!(
+                            "{men} vs {garrison} (seed {seed}): garrison breaks {}h{:02}, citadel falls {}h{:02}, {} men left",
+                            b / 60,
+                            b % 60,
+                            minute / 60,
+                            minute % 60,
+                            sim.armies[0].men
+                        );
+                        break;
+                    }
+                }
+                if sim.winner.is_none() && !sim.armies.is_empty() && !sim.armies[0].routing() {
+                    println!(
+                        "{men} vs {garrison} (seed {seed}): still standing after 48h, garrison {}",
+                        sim.forts[5].garrison
+                    );
+                }
             }
         }
     }
@@ -1220,7 +1368,10 @@ mod tests {
     #[test]
     fn every_seed_makes_a_playable_valley() {
         for seed in 0..40 {
-            let sim = Sim::new(seed);
+            let mut sim = Sim::new(seed);
+            for f in &mut sim.forts {
+                f.garrison = 0; // about the ground, not the gates
+            }
             let host = sim.army(4).unwrap();
             for f in &sim.forts {
                 assert!(sim.plan_path(host, f.pos).is_some(), "seed {seed}: the host can't reach {}", f.name);
@@ -1255,4 +1406,3 @@ mod tests {
         assert_eq!(sim.army(1).unwrap().men, before);
     }
 }
-

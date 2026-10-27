@@ -77,6 +77,12 @@ impl Fort {
         (x - self.pos.0).abs() <= 3 && (y - self.pos.1).abs() <= 2
     }
 
+    /// Whether the fort's gates are shut to `side`: a standing garrison keeps out
+    /// everyone but its own.
+    pub fn bars(&self, side: Side) -> bool {
+        self.garrison > 0 && self.owner != Some(side)
+    }
+
     /// Who is taking the fort and how many minutes they've held it.
     pub fn capture_progress(&self) -> Option<(Side, u32)> {
         self.capture

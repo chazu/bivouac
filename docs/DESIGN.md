@@ -239,8 +239,16 @@ Everywhere, foothills gather at the foot of the ridge, and each stretch gets cop
 - **Neutral forts can be captured** **[decided]**. They act as **supply depots and/or garrisons** **[decided]**, and they come with different **extras** ("accoutrements", e.g. dairy cows) **[decided in concept]**.
 - How capture works: a fort's garrison fights any hostile army within reach of its walls. Once the garrison breaks, an army that holds the fort alone for an hour takes it. Neutral forts start with a small militia garrison **[decided]**.
 - Sieges are **minimal** for now: storm the garrison **[decided]**. Starving a fort out, siege works and the like can come later.
-- Garrisons count as fully dug in. Whether **fort walls** give an extra bonus is **[open]**.
-- **Walls and gates** **[built]**: a fort's walls can only be crossed at its **gates**, the wall cells where a road runs through. Armies and wagons enter and leave by the gates. An army inside forms its line within the walls, and an army outside can't deploy into them. Fighting across a wall is allowed: a besieger can strike defenders from the ground just outside. Gates are drawn as timber `Π`s in the wall.
+- Garrisons count as fully dug in. A **palisade** (extra) steadies them too: they lose morale half as fast **[built]**.
+- **Walls and gates** **[built]**: a fort's walls can only be crossed at its **gates**, the wall cells where a road runs through. Armies and wagons enter and leave by the gates. An army inside forms its line within the walls, and an army outside can't deploy into them. Gates are drawn as timber `Π`s in the wall.
+- **Storming at the gates** **[built]**. This exists so an all-in rush can't simply overrun a capital:
+  - A fort with a garrison **shuts its gates** to everyone but its owner. A march on it stops on the ground before the nearest gate.
+  - Blows don't pass through a wall, only through a gate. So a fort can be **stormed only from the cells right before a gate**, which caps how much of a big army can fight.
+  - The garrison shoots at anyone within reach of its walls, and only men inside or at a gate can strike back.
+  - When the garrison breaks, its gates stand open (public news) and the fort can be walked into and taken.
+  - Capitals start with **800** men. Numbers from `cargo test -p bivouac-sim siege_report -- --ignored --nocapture`:
+    - 2440 men storm an 800-man capital in about 8½ hours and lose about 15%.
+    - 1800 men, or 2440 against 1200, break first.
 - Armies **inside the walls count as fully dug in** while they're there, even as they move from cell to cell **[built]**. They lose that cover the moment they step out of a gate.
 
 ### Fort extras **[proposed]**
@@ -372,7 +380,14 @@ The small picture of the fort is animated in the real window: the mill wheel tur
 
 ## 16. Opponent: AI **[decided: required]**
 
-- AI that plays through the same order interface as a human, seeing only what its armies can detect (no cheating at normal difficulty) **[proposed]**.
+- AI that plays through the same order interface as a human, seeing only what its armies can detect (no cheating at normal difficulty) **[built]**. It doesn't see inside forts beyond its sight; it assumes a typical garrison for the kind of fort.
+- **Strategy v1** **[built]**, replanned every half hour:
+  - **Home guard.** The capital's garrison never drops below 800.
+  - **Defend.** If an enemy force on its half of the valley could storm the capital, every army that can get home before the walls fall marches back at a forced march.
+  - **Counterstroke.** Armies too far away to help strike the enemy capital instead, or the weakest fort the enemy has left behind.
+  - **Gather, then strike.** Otherwise all field armies go for the same next fort. If one is too weak alone, it waits and merges with others at the nearest friendly fort.
+  - It reckons a walled fort takes 3 men per defender and an open one 2, plus half again any army standing by.
+  - **Feeding.** Hungry armies make for stores they can reach, and anyone passing a stocked fort tops up.
 - Probably layered: front strategy (which forts to attack or defend), army tasks (march, intercept, raid, resupply), and supply management **[proposed]**.
 - Testing: AI-vs-AI games run headless on the deterministic simulation **[proposed]**.
 
@@ -425,7 +440,7 @@ Built:
   - `--reveal` lifts the fog for debugging.
 
 Placeholders, until the open questions are settled:
-- **AI** keeps its armies aggressive and marches idle ones at the nearest fort it doesn't hold. It attacks defenders it can see there, and rests when tired. It has no real strategy yet.
+- **AI**: strategy v1 (§16): a home guard, defending, counterstrokes, and gathering before it storms. `cargo test -p bivouac-ai rush_report -- --ignored --nocapture` throws a scripted all-in rush at it.
 - **Time scale:** 1 game hour = 10 s at ×1 (`TICKS_PER_SECOND` in the client).
 - **Forest crowding**: 150 men to a forest cell (`path::FOREST_CAP`). Bigger forces pay +8 min and +2 stamina a cell for each extra 150 men. **Mountain cap** is 100 men (`path::MOUNTAIN_CAP`).
 - The full depot screen (Mockup 4) is not built yet. Selecting a fort shows a compact version in the panel.

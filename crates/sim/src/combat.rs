@@ -6,6 +6,7 @@
 use crate::army::{
     ArmyState, ENTRENCH_MAX, MARCH_COMPANIES_PER_CELL, MEN_PER_COMPANY, MORALE_MAX, STAMINA_MAX, Stance, room,
 };
+use crate::fort::Extra;
 use crate::intel::{AMBUSH_SHOCK, Seen};
 use crate::map::{MAP_H, MAP_W, Terrain};
 use crate::{Cell, Sim, Weather, push_log, push_private};
@@ -70,20 +71,31 @@ impl Sim {
         self.armies.iter().position(|a| a.id == id)
     }
 
-    /// Whether any part of army `i` is next to any part of army `j`.
+    /// Whether any part of army `i` is next to any part of army `j`, with no wall between.
     fn touching(&self, i: usize, j: usize) -> bool {
         let theirs = self.armies[j].column(&self.map);
-        self.armies[i].column(&self.map).iter().any(|&(c, _)| theirs.iter().any(|&(d, _)| distance(c, d) <= 1))
+        self.armies[i]
+            .column(&self.map)
+            .iter()
+            .any(|&(c, _)| theirs.iter().any(|&(d, _)| distance(c, d) <= 1 && self.blows_pass(c, d)))
     }
 
-    /// A free cell next to army `j`'s head, as close to army `i` as possible.
+    /// A free cell next to army `j`'s head, as close to army `i` as possible. If
+    /// `j` is behind gates shut to `i`, the ground before the gates.
     fn approach(&self, i: usize, j: usize) -> Option<Vec<Cell>> {
         let (me, them) = (&self.armies[i], &self.armies[j]);
+        if self.fort_at(them.pos).is_some_and(|f| f.bars(me.side) && !f.contains(me.pos)) {
+            return self.plan_march(me, them.pos);
+        }
         let blocked = self.enemy_cells(me.side);
         let mut goals: Vec<Cell> = AROUND
             .iter()
             .map(|&(dx, dy)| (them.pos.0 + dx, them.pos.1 + dy))
-            .filter(|&c| !blocked.contains(&c) && crate::path::enter_cost(&self.map, c, me.men, self.weather).is_some())
+            .filter(|&c| {
+                !blocked.contains(&c)
+                    && crate::path::enter_cost(&self.map, c, me.men, self.weather).is_some()
+                    && self.blows_pass(c, them.pos)
+            })
             .collect();
         goals.sort_by_key(|&c| distance(c, me.pos));
         goals.into_iter().find_map(|g| self.plan_path(me, g))
@@ -297,6 +309,9 @@ impl Sim {
                     if !self.map.in_bounds(nb.0, nb.1) {
                         continue;
                     }
+                    if !self.blows_pass(c, nb) {
+                        continue; // no fighting through a wall, only at its gates
+                    }
                     for &j in &grid[idx(nb)] {
                         if self.armies[j].side != self.armies[i].side {
                             contacts.push((i, c, companies, j, nb));
@@ -417,6 +432,9 @@ impl Sim {
                 .flat_map(|(i, col)| col.iter().filter(|(c, _)| f.within_reach(*c)).map(move |&(c, k)| (i, c, k)))
                 .collect();
             let front = f.garrison.div_ceil(MEN_PER_COMPANY).min(GARRISON_FRONT);
+            // The garrison shoots at anyone near its walls, but it can only be
+            // struck back by men inside or storming a gate.
+            let gates = self.assault_cells(f);
             for &(i, c, companies) in &hostile {
                 engaged[i] = true;
                 let wall = (c.0.clamp(f.pos.0 - 2, f.pos.0 + 2), c.1.clamp(f.pos.1 - 1, f.pos.1 + 1));
@@ -428,7 +446,7 @@ impl Sim {
                 }
                 d = conditions(self, d) * self.rng.range(50, 151) as u32 / 100;
                 hurt[i] += d;
-                if !a.routing() {
+                if !a.routing() && (f.contains(c) || gates.contains(&c)) {
                     // Garrisons are fully dug in.
                     let mut e = companies * HITS_PER_COMPANY * (60 + 40 * a.stamina as u32 / STAMINA_MAX as u32) / 100;
                     e = conditions(self, e * 60 / 100) * self.rng.range(50, 151) as u32 / 100;
@@ -481,17 +499,17 @@ impl Sim {
             f.garrison_bleed += garrison_hurt[fi];
             f.garrison -= (f.garrison_bleed / 1000).min(f.garrison);
             f.garrison_bleed %= 1000;
-            let shaken = garrison_hurt[fi] * MORALE_PER_LOSS * (MORALE_MAX / 1000) / men;
+            let mut shaken = garrison_hurt[fi] * MORALE_PER_LOSS * (MORALE_MAX / 1000) / men;
+            if f.extras.contains(&Extra::Palisade) {
+                shaken /= 2; // men behind a palisade don't break easily
+            }
             f.garrison_morale = f.garrison_morale.saturating_sub(shaken);
             if f.garrison_morale < ROUT_MORALE || f.garrison < MIN_MEN {
                 f.garrison = 0;
                 f.garrison_morale = BASE_MORALE;
-                push_private(
-                    &mut self.log,
-                    minute,
-                    f.owner,
-                    format!("The garrison of {} breaks and scatters!", f.name),
-                );
+                // Open gates are plain to everyone.
+                let text = format!("The garrison of {} breaks and scatters! Its gates stand open.", f.name);
+                push_log(&mut self.log, minute, f.owner, text);
             }
         }
 

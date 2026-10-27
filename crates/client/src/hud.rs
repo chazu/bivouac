@@ -70,6 +70,7 @@ fn intro(g: &Grid, l: &Layout, app: &App) {
             ("", TEXT),
             ("Armies standing still deploy into line and dig in.", DIM),
             ("Forts are entered only by their gates, where the roads run in; walls count as earthworks.", DIM),
+            ("A garrison shuts its gates to you: storm them, and only there can you strike back.", DIM),
             ("Your scouts only see so far: dust, campfires and tracks give enemies away.", DIM),
             ("Forests hide small parties. Night, fog and rain shorten everyone's sight.", DIM),
             ("", TEXT),
@@ -607,6 +608,9 @@ fn fort_detail(pen: &mut Pen, f: &Fort, app: &App, sim: &Sim) {
         (&format!("{} · {}", f.kind.label(), side_name(f.owner, app.player)), DIM),
         (&format!("  · garrison {}", f.garrison), DIM),
     ]);
+    if f.bars(app.player) {
+        pen.line("Gates shut. Storm a gate (only there can you strike the garrison).", DIM);
+    }
     if f.garrison > 0 {
         let pct = f.garrison_morale / 1000;
         pen.segs(&[
