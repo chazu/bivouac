@@ -9,6 +9,9 @@ pub enum FortKind {
     Keep,
     Mill,
     Village,
+    /// A farmstead: no walls and no garrison, just fields and a granary. Whoever
+    /// stands on it holds it.
+    Farm,
 }
 
 impl FortKind {
@@ -18,6 +21,7 @@ impl FortKind {
             FortKind::Keep => "keep",
             FortKind::Mill => "supply depot",
             FortKind::Village => "village",
+            FortKind::Farm => "farm",
         }
     }
 }
@@ -68,8 +72,19 @@ pub struct Fort {
 }
 
 impl Fort {
+    /// The holding's ground: 5×3 cells inside a fort's walls, or a farm's three
+    /// cells of steading and fields along its road.
     pub fn contains(&self, (x, y): Cell) -> bool {
-        (x - self.pos.0).abs() <= 2 && (y - self.pos.1).abs() <= 1
+        if self.walled() {
+            (x - self.pos.0).abs() <= 2 && (y - self.pos.1).abs() <= 1
+        } else {
+            (x - self.pos.0).abs() <= 1 && y == self.pos.1
+        }
+    }
+
+    /// Whether it has walls: everything but a farm.
+    pub fn walled(&self) -> bool {
+        self.kind != FortKind::Farm
     }
 
     /// Inside the walls or right up against them: where the garrison can fight.
@@ -94,6 +109,7 @@ impl Fort {
             FortKind::Keep => 1500,
             FortKind::Mill => 1000,
             FortKind::Village => 800,
+            FortKind::Farm => 400,
         };
         let granary = if self.extras.contains(&Extra::Granary) { 1000 } else { 0 };
         base + granary
@@ -107,8 +123,9 @@ impl Fort {
         let mut p = [0; 3];
         match self.kind {
             // A capital draws on the whole province behind it.
-            FortKind::Main => p[GRAIN] += 2500,
+            FortKind::Main => p[GRAIN] += 3500,
             FortKind::Village => p[GRAIN] += 60,
+            FortKind::Farm => p[GRAIN] += 80,
             _ => {}
         }
         for e in &self.extras {

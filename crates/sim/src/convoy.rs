@@ -122,7 +122,7 @@ impl Sim {
         total.saturating_sub(c.progress / 10)
     }
 
-    fn wagon_route(&self, from: Cell, to: Cell) -> Option<Vec<Cell>> {
+    pub(crate) fn wagon_route(&self, from: Cell, to: Cell) -> Option<Vec<Cell>> {
         let weather = self.weather;
         path::find_route(&self.map, from, to, |c| path::wagon_cost(&self.map, c, weather), |_| false)
     }
@@ -451,20 +451,25 @@ mod tests {
 
     use super::*;
 
-    /// A sim where the West also holds Willow Ford Mill and a train runs to it.
+    /// A sim where the West also holds the first mill down the Imperial Road and a
+    /// train runs to it.
     fn with_route() -> Sim {
         let mut sim = Sim::new(7);
-        sim.forts[1].owner = Some(Side::West);
-        sim.forts[1].garrison = 0;
-        sim.forts[1].stores = [0; 3];
-        sim.apply(Side::West, Order::Supply { from: 0, to: 1 }).unwrap();
+        let r = sim.road_forts();
+        sim.forts[r[1]].owner = Some(Side::West);
+        sim.forts[r[1]].garrison = 0;
+        sim.forts[r[1]].stores = [0; 3];
+        // Room for a full load on top of a day's milling.
+        sim.forts[r[1]].extras.push(crate::Extra::Granary);
+        sim.apply(Side::West, Order::Supply { from: r[0] as u32, to: r[1] as u32 }).unwrap();
         sim
     }
 
     #[test]
     fn trains_carry_stores_down_the_road() {
         let mut sim = with_route();
-        let before = sim.forts[0].total_stores();
+        let r = sim.road_forts();
+        let before = sim.forts[r[0]].total_stores();
         for _ in 0..24 * 60 {
             sim.tick();
             assert!(
@@ -475,8 +480,8 @@ mod tests {
             );
         }
         assert!(sim.convoys[0].delivered >= CONVOY_LOAD, "delivered {}", sim.convoys[0].delivered);
-        assert!(sim.forts[1].total_stores() > 0);
-        assert!(sim.forts[0].total_stores() < before + 2500);
+        assert!(sim.forts[r[1]].total_stores() > 0);
+        assert!(sim.forts[r[0]].total_stores() < before + 3500);
     }
 
     #[test]
@@ -524,10 +529,11 @@ mod tests {
     #[test]
     fn losing_a_fort_ends_its_route() {
         let mut sim = with_route();
+        let r = sim.road_forts();
         for _ in 0..60 {
             sim.tick();
         }
-        sim.forts[1].owner = Some(Side::East);
+        sim.forts[r[1]].owner = Some(Side::East);
         for _ in 0..24 * 60 {
             sim.tick();
         }
@@ -538,8 +544,9 @@ mod tests {
     fn every_fort_is_on_the_road_network() {
         for seed in 0..20 {
             let sim = Sim::new(seed);
+            let r = sim.road_forts();
             for f in &sim.forts {
-                assert!(sim.wagon_route(sim.forts[0].pos, f.pos).is_some(), "seed {seed}: no road to {}", f.name);
+                assert!(sim.wagon_route(sim.forts[r[0]].pos, f.pos).is_some(), "seed {seed}: no road to {}", f.name);
             }
         }
     }

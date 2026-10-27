@@ -18,6 +18,7 @@ const WATER: Color = rgb(0.30, 0.50, 0.88);
 const ROAD: Color = rgb(0.74, 0.62, 0.42);
 const PLANKS: Color = rgb(0.46, 0.33, 0.19);
 const ROOF: Color = rgb(0.55, 0.47, 0.50);
+const CROPS: Color = rgb(0.80, 0.70, 0.34);
 const FOG_OF_WAR: Color = Color { r: 0.01, g: 0.01, b: 0.03, a: 0.58 };
 
 /// Converts map coordinates to pixels for the current scroll position.
@@ -183,6 +184,10 @@ fn draw_forts(g: &Grid, v: &View, l: &Layout, sim: &Sim, light: &Light, t: f32) 
         if !v.visible(fx, l.cols + 3) {
             continue;
         }
+        if !f.walled() {
+            draw_farm(g, v, f, light, t);
+            continue;
+        }
         let base = palette::side_or_stone(f.owner);
         let color = light.lit_bright(base);
         let fill = if f.kind == FortKind::Main { '▓' } else { '▒' };
@@ -248,6 +253,37 @@ fn draw_forts(g: &Grid, v: &View, l: &Layout, sim: &Sim, light: &Light, t: f32) 
         }
         g.label(v.px(fx) + g.cw * 0.5, v.py((fy + 2) as f32) + 2.0, f.name, mix(color, palette::TEXT, 0.5));
     }
+}
+
+/// A farmstead: a thatched house on the road between two strips of crops, a
+/// pennant over it once someone holds it.
+fn draw_farm(g: &Grid, v: &View, f: &bivouac_sim::Fort, light: &Light, t: f32) {
+    let (fx, fy) = f.pos;
+    let color = light.lit_bright(palette::side_or_stone(f.owner));
+    let ripe = light.lit_bright(CROPS);
+    for dx in [-1, 1] {
+        let sway = ((t * 1.3 + (fx + dx) as f32 * 0.7).sin() > 0.0) as usize;
+        g.put_px(v.px(fx + dx), v.py(fy as f32), ['"', '‟'][sway], ripe);
+    }
+    draw_rectangle(v.px(fx) + g.cw * 0.1, v.py(fy as f32), g.cw * 0.8, g.ch, light.lit(rgb(0.05, 0.05, 0.06), 1.0));
+    g.put_px(v.px(fx), v.py(fy as f32), '⌂', color);
+    if f.owner.is_some() {
+        let pole = v.px(fx) + g.cw * 0.5;
+        let (foot, top) = (v.py(fy as f32), v.py(fy as f32) - g.ch * 0.8);
+        draw_line(pole, foot, pole, top, 1.2, scale(color, 0.8));
+        let sway = (t * 2.2 + fx as f32).sin() * g.cw * 0.1;
+        draw_triangle(
+            vec2(pole, top),
+            vec2(pole + g.cw * 0.55 + sway, top + g.ch * 0.18),
+            vec2(pole, top + g.ch * 0.36),
+            color,
+        );
+    }
+    if let Some((side, held)) = f.capture_progress() {
+        let w = 3.0 * g.cw * held as f32 / bivouac_sim::fort::CAPTURE_MINUTES as f32;
+        draw_rectangle(v.px(fx - 1), v.py(fy as f32) - 4.0, w, 3.0, palette::side(side));
+    }
+    g.label(v.px(fx) + g.cw * 0.5, v.py((fy + 1) as f32) + 2.0, f.name, mix(color, palette::TEXT, 0.5));
 }
 
 /// Sparks where cells clash, and dust hanging over the fighting.

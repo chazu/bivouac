@@ -107,7 +107,7 @@ async fn main() {
     let layout = Layout::new(&grid, app.sky_collapsed);
     match args.scroll {
         Some(x) => app.scroll = x,
-        None => app.center_on(sim.forts[1].pos.0 - 10, &layout),
+        None => app.center_on(opening_view(&sim, app.player), &layout),
     }
 
     let mut pending = 0.0f32;
@@ -123,7 +123,7 @@ async fn main() {
             fresh.sky_collapsed = app.sky_collapsed;
             fresh.reveal = app.reveal;
             app = fresh;
-            app.center_on(sim.forts[1].pos.0 - 10, &layout);
+            app.center_on(opening_view(&sim, app.player), &layout);
             pending = 0.0;
         }
 
@@ -162,4 +162,10 @@ async fn main() {
 /// A fresh map each game. The sim itself never touches the clock.
 fn random_seed() -> u64 {
     (macroquad::miniquad::date::now() * 1000.0) as u64
+}
+
+/// Where the view opens: a little out from the player's capital, toward the enemy.
+fn opening_view(sim: &Sim, player: Side) -> i32 {
+    let toward = if player == Side::West { 34 } else { -34 };
+    sim.capital(player).map_or(bivouac_sim::MAP_W / 2, |f| f.pos.0 + toward)
 }

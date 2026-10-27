@@ -15,7 +15,9 @@ pub const STAMINA_MAX: u16 = 1000;
 /// Food is tracked in thousandths of a ration (one ration feeds one man for a day)
 /// so hourly eating doesn't round away.
 pub const MILLI: u64 = 1000;
-pub const CARRY_DAYS: u64 = 5;
+/// Days of food a man carries on his back. Beyond that an army lives on forts,
+/// wagons and what it can forage.
+pub const CARRY_DAYS: u64 = 3;
 const TRAIL_LEN: usize = 24;
 /// Morale is kept in thousandths of a percent so small losses still register.
 pub const MORALE_MAX: u32 = 100_000;
@@ -130,6 +132,8 @@ pub struct Army {
     /// Cells recently left, newest first. A long column stretches back along them.
     pub trail: VecDeque<Cell>,
     pub starving: bool,
+    /// Men who have slipped away for want of food since the last report.
+    pub(crate) deserted: u32,
     pub morale: u32,
     pub stance: Stance,
     pub pace: Pace,
@@ -160,13 +164,14 @@ impl Army {
             name: name.to_string(),
             men,
             stamina: 800,
-            food: men as u64 * 3 * MILLI,
+            food: men as u64 * CARRY_DAYS * MILLI,
             pos,
             path: VecDeque::new(),
             progress: 0,
             state: ArmyState::Holding,
             trail: VecDeque::new(),
             starving: false,
+            deserted: 0,
             morale: MORALE_MAX * 8 / 10,
             stance: Stance::Defensive,
             pace: Pace::Normal,
@@ -187,6 +192,17 @@ impl Army {
 
     pub fn food_capacity(&self) -> u64 {
         self.men as u64 * CARRY_DAYS * MILLI
+    }
+
+    /// Milli-rations eaten an hour: a ration a man a day, more on the march and
+    /// more again at a forced march.
+    pub fn ration(&self) -> u64 {
+        let need = self.men as u64 * MILLI / 24;
+        match (self.state, self.pace) {
+            (ArmyState::Marching, Pace::Fast) => need * 3 / 2,
+            (ArmyState::Marching, _) => need * 5 / 4,
+            _ => need,
+        }
     }
 
     pub fn food_days(&self) -> f32 {

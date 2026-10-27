@@ -23,11 +23,27 @@ pub use fort::{Extra, Fort, FortKind};
 pub use intel::{Intel, Report, Seen, Track};
 pub use map::{MAP_H, MAP_W, Map, Road, Terrain};
 
-use army::{ENTRENCH_MAX, MEN_PER_COMPANY, MILLI, STAMINA_MAX};
+use army::{CARRY_DAYS, ENTRENCH_MAX, MEN_PER_COMPANY, MILLI, STAMINA_MAX};
 use fort::CAPTURE_MINUTES;
 use rng::Rng;
 
 pub type Cell = (i32, i32);
+
+/// An army foraging off the land scrapes up enough to feed this many men, so a
+/// raiding party can live off the country and a great host can't.
+pub const FORAGE_MEN: u64 = 200;
+/// Where cell `c`'s forage is kept in [`Sim::forage`]: a column of one lane.
+pub fn forage_index((x, y): Cell) -> usize {
+    map::lane(y) * MAP_W as usize + x as usize
+}
+
+/// Rations each column of each lane holds for foragers, and how many grow back a day.
+pub const FORAGE_MAX: u32 = 400;
+const FORAGE_REGROW: u32 = 40;
+/// Share of a starving army, in percent, that slips away each hour.
+const DESERT_PERCENT: u32 = 1;
+/// Morale a starving army loses each hour.
+const HUNGER_MORALE: u32 = army::MORALE_MAX / 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -169,6 +185,9 @@ pub struct Sim {
     pub tracks: Vec<Track>,
     /// Supply trains, one per route.
     pub convoys: Vec<Convoy>,
+    /// Milli-rations left for foragers in each column of each lane of the valley;
+    /// see [`forage_index`].
+    pub forage: Vec<u32>,
     rng: Rng,
     next_army_id: u32,
     next_convoy_id: u32,
@@ -197,8 +216,28 @@ impl Sim {
         self.armies.iter().find(|a| a.id == id)
     }
 
+    /// The holding (fort or farm) whose ground `c` is.
     pub fn fort_at(&self, c: Cell) -> Option<&Fort> {
         self.forts.iter().find(|f| f.contains(c))
+    }
+
+    /// The fort whose walls enclose `c`; farms have none.
+    pub fn walls_at(&self, c: Cell) -> Option<&Fort> {
+        self.fort_at(c).filter(|f| f.walled())
+    }
+
+    /// The walled forts down the Imperial Road from west to east, as indexes into
+    /// [`Sim::forts`]: a capital at either end and the towns between.
+    pub fn road_forts(&self) -> Vec<usize> {
+        let mut road: Vec<usize> =
+            (0..self.forts.len()).filter(|&i| self.forts[i].walled() && map::lane(self.forts[i].pos.1) == 1).collect();
+        road.sort_by_key(|&i| self.forts[i].pos.0);
+        road
+    }
+
+    /// The main fort `side` still holds.
+    pub fn capital(&self, side: Side) -> Option<&Fort> {
+        self.forts.iter().find(|f| f.kind == FortKind::Main && f.owner == Some(side))
     }
 
     /// Debug/scenario hook; normal weather comes from [`Sim::tick`].
@@ -295,7 +334,7 @@ impl Sim {
     /// Whether blows can pass between neighboring cells `a` and `b`. Walls stop
     /// them except at a gate.
     pub(crate) fn blows_pass(&self, a: Cell, b: Cell) -> bool {
-        let (fa, fb) = (self.fort_at(a).map(|f| f.id), self.fort_at(b).map(|f| f.id));
+        let (fa, fb) = (self.walls_at(a).map(|f| f.id), self.walls_at(b).map(|f| f.id));
         fa == fb || ((fa.is_none() || self.map.is_gate(a.0, a.1)) && (fb.is_none() || self.map.is_gate(b.0, b.1)))
     }
 
@@ -529,7 +568,7 @@ impl Sim {
         f.garrison -= men;
         let mut a = Army::new(id, side, &name, men, f.pos);
         a.morale = f.garrison_morale;
-        a.food = f.take(men * 3) as u64 * MILLI;
+        a.food = f.take(men * CARRY_DAYS as u32) as u64 * MILLI;
         let text = format!("{name} musters at {} with {men} men.", f.name);
         self.armies.push(a);
         self.note(Some(side), text);
@@ -646,9 +685,9 @@ impl Sim {
                 ArmyState::Holding => 1,
                 ArmyState::Marching | ArmyState::Routing => 0,
             };
-            if !a.starving {
-                a.stamina = (a.stamina + gain).min(STAMINA_MAX);
-            }
+            // Hungry men rest poorly.
+            let gain = if a.starving { gain / 2 } else { gain };
+            a.stamina = (a.stamina + gain).min(STAMINA_MAX);
             if matches!(a.state, ArmyState::Holding | ArmyState::Resting) {
                 a.entrench = (a.entrench + combat::ENTRENCH_PER_MINUTE).min(ENTRENCH_MAX);
             }
@@ -657,27 +696,58 @@ impl Sim {
 
     fn eat_and_resupply(&mut self) {
         let minute = self.clock.minute;
+        let report = self.clock.minute_of_day().is_multiple_of(6 * 60);
         for a in &mut self.armies {
+            let need = a.ration();
             if let Some(f) = self.forts.iter_mut().find(|f| f.owner == Some(a.side) && f.contains(a.pos)) {
                 let want = (a.food_capacity().saturating_sub(a.food) / MILLI) as u32;
                 a.food += f.take(want) as u64 * MILLI;
-            }
-            let mut need = a.men as u64 * MILLI / 24;
-            if a.state == ArmyState::Marching {
-                need = need * 5 / 4;
+            } else {
+                // Outside the walls the men scour the country for whatever it holds.
+                let land = &mut self.forage[forage_index(a.pos)];
+                let room = (a.food_capacity() + need).saturating_sub(a.food);
+                let got = (FORAGE_MEN * MILLI / 24).min(room).min(*land as u64);
+                *land -= got as u32;
+                a.food += got;
             }
             if a.food >= need {
-                a.food -= need;
-                a.starving = false;
-            } else {
-                a.food = 0;
-                if !a.starving {
-                    push_private(&mut self.log, minute, Some(a.side), format!("{} has run out of food!", a.name));
+                let day = a.men as u64 * MILLI;
+                if a.food >= day && a.food - need < day {
+                    push_private(&mut self.log, minute, Some(a.side), format!("{} has a day's food left.", a.name));
                 }
-                a.starving = true;
-                a.stamina = a.stamina.saturating_sub(30);
+                a.food -= need;
+                if a.starving && a.deserted > 0 {
+                    let text = format!("{} eats again, {} men fewer for the hunger.", a.name, a.deserted);
+                    push_private(&mut self.log, minute, Some(a.side), text);
+                }
+                a.starving = false;
+                a.deserted = 0;
+                continue;
+            }
+            a.food = 0;
+            if !a.starving {
+                let text = format!("{} has run out of food! Men begin to slip away.", a.name);
+                push_private(&mut self.log, minute, Some(a.side), text);
+            }
+            a.starving = true;
+            let gone = (a.men * DESERT_PERCENT).div_ceil(100).min(a.men);
+            a.men -= gone;
+            a.deserted += gone;
+            a.morale = a.morale.saturating_sub(HUNGER_MORALE);
+            if report {
+                let text = format!("Hunger thins {}: {} men have deserted.", a.name, a.deserted);
+                push_private(&mut self.log, minute, Some(a.side), text);
+                a.deserted = 0;
             }
         }
+    }
+
+    /// Milli-rations an hour the army would forage where it stands.
+    pub fn forage_at(&self, a: &Army) -> u64 {
+        if self.forts.iter().any(|f| f.owner == Some(a.side) && f.contains(a.pos)) {
+            return 0;
+        }
+        (FORAGE_MEN * MILLI / 24).min(self.forage[forage_index(a.pos)] as u64)
     }
 
     fn update_captures(&mut self) {
@@ -718,14 +788,19 @@ impl Sim {
     }
 
     fn produce(&mut self) {
+        for land in &mut self.forage {
+            *land = (*land + FORAGE_REGROW * MILLI as u32).min(FORAGE_MAX * MILLI as u32);
+        }
         for f in &mut self.forts {
             f.add(f.daily_production());
             f.take(f.garrison);
-            // Held towns send recruits; neutral ones keep to themselves.
-            if f.owner.is_some() {
+            // Held towns send recruits to a fort with two days' food in hand for
+            // its garrison; neutral ones keep to themselves.
+            if f.owner.is_some() && f.total_stores() >= f.garrison * 2 {
                 let recruits = match f.kind {
                     FortKind::Main => 120,
                     FortKind::Village => 40,
+                    FortKind::Farm => 0,
                     _ => 15,
                 };
                 f.garrison = (f.garrison + recruits).min(MAX_GARRISON);
@@ -790,6 +865,9 @@ impl Sim {
                 mix(v);
             }
         }
+        for &land in &self.forage {
+            mix(land as u64);
+        }
         for c in &self.convoys {
             for v in [c.id as u64, c.pos.0 as u64, c.pos.1 as u64, c.progress as u64, c.load() as u64, c.to as u64] {
                 mix(v);
@@ -817,7 +895,8 @@ mod tests {
     fn same_seed_same_game() {
         let run = || {
             let mut sim = Sim::new(SEED);
-            sim.apply(Side::West, Order::March { army: 2, to: sim.forts[1].pos }).unwrap();
+            let r = sim.road_forts();
+            sim.apply(Side::West, Order::March { army: 2, to: sim.forts[r[1]].pos }).unwrap();
             for _ in 0..5000 {
                 sim.tick();
             }
@@ -861,7 +940,7 @@ mod tests {
             }
             let host = sim.army(1).unwrap();
             let mut walked = 0;
-            for f in &sim.forts {
+            for f in sim.forts.iter().filter(|f| f.walled()) {
                 let (fx, fy) = f.pos;
                 let gates = (fx - 2..=fx + 2).flat_map(|x| (fy - 1..=fy + 1).map(move |y| (x, y)));
                 assert!(
@@ -882,22 +961,24 @@ mod tests {
                     }
                 }
             }
-            assert!(walked >= 2 * sim.forts.len(), "seed {seed}: only {walked} routes into forts");
+            let walled = sim.forts.iter().filter(|f| f.walled()).count();
+            assert!(walked >= 2 * walled, "seed {seed}: only {walked} routes into forts");
         }
     }
 
     #[test]
     fn a_line_in_a_fort_stays_behind_its_walls() {
         let mut sim = Sim::new(SEED);
+        let r = sim.road_forts();
         sim.armies.retain(|a| a.id == 1);
-        sim.armies[0].pos = (sim.forts[1].pos.0 + 1, sim.forts[1].pos.1 - 1);
+        sim.armies[0].pos = (sim.forts[r[1]].pos.0 + 1, sim.forts[r[1]].pos.1 - 1);
         sim.apply(Side::West, Order::Hold { army: 1 }).unwrap();
         for _ in 0..combat::DEPLOY_MINUTES {
             sim.tick();
         }
         let line = sim.armies[0].column(&sim.map);
         assert_eq!(line.len(), 5, "1800 men still need 5 cells of line");
-        assert!(line.iter().all(|&(c, _)| sim.forts[1].contains(c)), "line spilled outside the walls: {line:?}");
+        assert!(line.iter().all(|&(c, _)| sim.forts[r[1]].contains(c)), "line spilled outside the walls: {line:?}");
     }
 
     fn open_forest(sim: &Sim) -> Cell {
@@ -947,9 +1028,10 @@ mod tests {
     fn an_easy_pace_spares_stamina_and_a_forced_march_spends_it() {
         let run = |pace| {
             let mut sim = Sim::new(SEED);
+            let r = sim.road_forts();
             sim.armies.retain(|a| a.id == 2);
             sim.apply(Side::West, Order::SetPace { army: 2, pace }).unwrap();
-            sim.apply(Side::West, Order::March { army: 2, to: sim.forts[1].pos }).unwrap();
+            sim.apply(Side::West, Order::March { army: 2, to: sim.forts[r[1]].pos }).unwrap();
             let mut minutes = 0;
             while sim.armies[0].state == ArmyState::Marching && minutes < 4000 {
                 sim.tick();
@@ -978,19 +1060,21 @@ mod tests {
     }
 
     #[test]
-    fn every_valley_has_all_four_countries() {
+    fn every_valley_has_three_countries_mirrored() {
         for seed in 0..20 {
             let sim = Sim::new(seed);
             let regions = &sim.map.regions;
-            assert_eq!(regions.len(), sim.forts.len() - 1);
-            for country in
-                [map::Country::Woodland, map::Country::Narrows, map::Country::Highlands, map::Country::Farmland]
-            {
-                assert!(regions.iter().any(|r| r.country == country), "seed {seed}: no {country:?}");
+            assert_eq!(regions.len(), sim.road_forts().len() - 1);
+            let mut kinds: Vec<_> = regions.iter().map(|r| r.country as u8).collect();
+            kinds.sort();
+            kinds.dedup();
+            assert_eq!(kinds.len(), 3, "seed {seed}: {regions:?}");
+            for (r, mirror) in regions.iter().zip(regions.iter().rev()) {
+                assert_eq!(r.country, mirror.country, "seed {seed}: the halves differ");
             }
             for r in regions {
                 assert_eq!(regions.iter().filter(|q| q.name == r.name).count(), 1, "seed {seed}: two {}", r.name);
-                let cells = (r.x0..=r.x1).flat_map(|x| (3..10).map(move |y| (x, y)));
+                let cells = (r.x0..=r.x1).flat_map(|x| (3..map::RIVER_TOP).map(move |y| (x, y)));
                 let count = |t| cells.clone().filter(|&(x, y)| sim.map.terrain(x, y) == t).count();
                 let (wood, hill, rock) = (count(Terrain::Forest), count(Terrain::Hill), count(Terrain::Mountain));
                 match r.country {
@@ -998,7 +1082,7 @@ mod tests {
                     map::Country::Narrows => {
                         // Somewhere the passable ground north of the river shrinks to a defile.
                         let open = |x| {
-                            (0..10)
+                            (0..map::RIVER_TOP)
                                 .filter(|&y| !matches!(sim.map.terrain(x, y), Terrain::Mountain | Terrain::River))
                                 .count()
                         };
@@ -1015,39 +1099,42 @@ mod tests {
     #[test]
     fn holding_an_empty_fort_for_an_hour_takes_it() {
         let mut sim = Sim::new(SEED);
-        sim.forts[1].garrison = 0;
-        sim.armies[1].pos = sim.forts[1].pos;
+        let r = sim.road_forts();
+        sim.forts[r[1]].garrison = 0;
+        sim.armies[1].pos = sim.forts[r[1]].pos;
         for _ in 0..CAPTURE_MINUTES {
             sim.tick();
         }
-        assert_eq!(sim.forts[1].owner, Some(Side::West));
+        assert_eq!(sim.forts[r[1]].owner, Some(Side::West));
     }
 
     #[test]
     fn a_garrison_must_be_beaten_before_the_fort_falls() {
         let mut sim = Sim::new(SEED);
-        sim.armies[0].pos = sim.forts[1].pos; // 1800 men against 190 militia
+        let r = sim.road_forts();
+        sim.armies[0].pos = sim.forts[r[1]].pos; // 1800 men against 190 militia
         for _ in 0..CAPTURE_MINUTES {
             sim.tick();
         }
-        assert_eq!(sim.forts[1].owner, None, "fell while the garrison still stood");
+        assert_eq!(sim.forts[r[1]].owner, None, "fell while the garrison still stood");
         for _ in 0..12 * 60 {
             sim.tick();
         }
-        assert_eq!(sim.forts[1].owner, Some(Side::West), "the militia should have broken by now");
+        assert_eq!(sim.forts[r[1]].owner, Some(Side::West), "the militia should have broken by now");
     }
 
     #[test]
     fn a_garrison_shuts_its_gates() {
         let mut sim = Sim::new(SEED);
-        let f = sim.forts[1].clone();
+        let r = sim.road_forts();
+        let f = sim.forts[r[1]].clone();
         let host = sim.army(1).unwrap();
         let route = sim.plan_march(host, f.pos).expect("should reach the gates");
         let end = *route.last().unwrap();
         assert!(!f.contains(end), "marched into a garrisoned fort");
         assert!(sim.assault_cells(&f).contains(&end), "stopped at {end:?}, not before a gate");
         assert!(route.iter().all(|&c| !f.contains(c)), "walked through a shut gate");
-        sim.forts[1].garrison = 0;
+        sim.forts[r[1]].garrison = 0;
         let host = sim.army(1).unwrap();
         let route = sim.plan_march(host, f.pos).unwrap();
         assert_eq!(route.last(), Some(&f.pos), "an empty fort's gates are open");
@@ -1056,8 +1143,10 @@ mod tests {
     #[test]
     fn walls_are_stormed_only_at_their_gates() {
         let mut sim = Sim::new(SEED);
+        let r = sim.road_forts();
         sim.armies.retain(|a| a.id == 2);
-        let f = sim.forts[1].clone();
+        let f = sim.forts[r[1]].clone();
+        let garrison = f.garrison;
         let gates = sim.assault_cells(&f);
         // Up against the wall but away from any gate: shot at, can't strike back.
         let wall = (-3..=3)
@@ -1069,7 +1158,7 @@ mod tests {
         for _ in 0..120 {
             sim.tick();
         }
-        assert_eq!(sim.forts[1].garrison, 190, "struck the garrison over its wall");
+        assert_eq!(sim.forts[r[1]].garrison, garrison, "struck the garrison over its wall");
         assert!(sim.armies[0].men < 640, "the garrison should shoot at men under its walls");
     }
 
@@ -1143,10 +1232,11 @@ mod tests {
             }
         }
         let mut sim = Sim::new(SEED);
-        sim.armies[0].pos = sim.forts[1].pos;
+        let r = sim.road_forts();
+        sim.armies[0].pos = sim.forts[r[1]].pos;
         for minute in 0..24 * 60 {
             sim.tick();
-            if sim.forts[1].garrison == 0 {
+            if sim.forts[r[1]].garrison == 0 {
                 println!(
                     "1st Army (1800) breaks Ashford's 190 militia in {}h{:02}, {} men left",
                     minute / 60,
@@ -1166,11 +1256,12 @@ mod tests {
         for (men, garrison) in [(2440, 800), (1800, 800), (2440, 1200), (640, 190)] {
             for seed in 0..3 {
                 let mut sim = Sim::new(seed);
+                let r = sim.road_forts();
                 sim.armies.retain(|a| a.id == 1);
                 sim.armies[0].men = men;
                 sim.armies[0].pos = sim.map.road_cell(0, 215);
-                sim.forts[5].garrison = garrison;
-                sim.apply(Side::West, Order::March { army: 1, to: sim.forts[5].pos }).unwrap();
+                sim.forts[r[5]].garrison = garrison;
+                sim.apply(Side::West, Order::March { army: 1, to: sim.forts[r[5]].pos }).unwrap();
                 let mut broke = None;
                 let mut start = 0;
                 for minute in 0..48 * 60 {
@@ -1182,9 +1273,9 @@ mod tests {
                         println!("{men} vs {garrison} (seed {seed}): the stormers break after {}h", minute / 60);
                         break;
                     }
-                    if broke.is_none() && sim.forts[5].garrison == 0 {
+                    if broke.is_none() && sim.forts[r[5]].garrison == 0 {
                         broke = Some(minute);
-                        let pos = sim.forts[5].pos;
+                        let pos = sim.forts[r[5]].pos;
                         sim.apply(Side::West, Order::March { army: 1, to: pos }).unwrap();
                     }
                     if sim.winner.is_some() {
@@ -1203,16 +1294,142 @@ mod tests {
                 if sim.winner.is_none() && !sim.armies.is_empty() && !sim.armies[0].routing() {
                     println!(
                         "{men} vs {garrison} (seed {seed}): still standing after 48h, garrison {}",
-                        sim.forts[5].garrison
+                        sim.forts[r[5]].garrison
                     );
                 }
             }
         }
     }
 
+    /// How far a host gets on what it carries: Lantern Gate to the Citadel's doorstep
+    /// with full packs, resting when spent, the forts between empty.
+    /// `cargo test -p bivouac-sim supply_report -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn supply_report() {
+        for men in [2440, 600, 150] {
+            for pace in [Pace::Normal, Pace::Fast] {
+                let mut sim = Sim::new(SEED);
+                sim.armies.retain(|a| a.id == 1);
+                for f in sim.forts.iter_mut().filter(|f| f.kind != FortKind::Main) {
+                    f.garrison = 0;
+                    f.stores = [0; 3];
+                }
+                let a = &mut sim.armies[0];
+                a.men = men;
+                a.food = a.food_capacity();
+                a.pace = pace;
+                let goal = sim.map.road_cell(0, 226);
+                let mut hungry = None;
+                for minute in 0..8 * 1440 {
+                    if minute % 30 == 0 {
+                        let a = &sim.armies[0];
+                        if a.stamina < 150 && a.state != ArmyState::Resting {
+                            sim.apply(Side::West, Order::Rest { army: 1 }).unwrap();
+                        } else if a.state != ArmyState::Marching && (a.state != ArmyState::Resting || a.stamina >= 700)
+                        {
+                            sim.apply(Side::West, Order::March { army: 1, to: goal }).unwrap();
+                        }
+                    }
+                    sim.tick();
+                    let Some(a) = sim.armies.first() else { break };
+                    if hungry.is_none() && a.starving {
+                        hungry = Some(minute / 60);
+                    }
+                    if a.pos == goal {
+                        println!(
+                            "{men} men, {}: arrive after {}h with {} men, food {:.1}d, stamina {}, starving from {:?}h",
+                            pace.label(),
+                            minute / 60,
+                            a.men,
+                            a.food_days(),
+                            a.stamina,
+                            hungry
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn starving_men_desert_but_can_still_march() {
+        let mut sim = Sim::new(SEED);
+        sim.armies.retain(|a| a.id == 2);
+        sim.forage.iter_mut().for_each(|land| *land = 0);
+        let a = &mut sim.armies[0];
+        a.food = 0;
+        a.stamina = 100;
+        sim.apply(Side::West, Order::Rest { army: 2 }).unwrap();
+        let morale = sim.armies[0].morale;
+        for _ in 0..12 * 60 {
+            sim.tick();
+        }
+        let a = &sim.armies[0];
+        assert!(a.starving);
+        assert!(a.men < 600 && a.men > 500, "about one in a hundred slips away each hour: {} left", a.men);
+        assert!(a.morale < morale, "hunger wears at morale");
+        assert!(a.stamina > 300, "hungry men still rest, if poorly: {}", a.stamina);
+    }
+
+    #[test]
+    fn a_raiding_party_lives_off_the_land_and_a_host_cannot() {
+        let mut sim = Sim::new(SEED);
+        sim.armies.retain(|a| a.id == 2 || a.id == 3);
+        for a in &mut sim.armies {
+            a.food = 0;
+        }
+        for _ in 0..24 * 60 {
+            sim.tick();
+        }
+        let (banner, sparrows) = (sim.army(2).unwrap(), sim.army(3).unwrap());
+        assert!(!sparrows.starving && sparrows.men == 60, "sixty men forage enough");
+        assert!(banner.starving && banner.men < 640, "six hundred don't");
+        assert!(sim.forage[forage_index(sparrows.pos)] < FORAGE_MAX * MILLI as u32, "the land is eaten bare");
+    }
+
+    #[test]
+    fn a_hungry_fort_gets_no_recruits() {
+        let mut sim = Sim::new(SEED);
+        let r = sim.road_forts();
+        sim.armies.clear();
+        let f = &mut sim.forts[r[1]];
+        f.owner = Some(Side::West);
+        f.stores = [0; 3];
+        let garrison = f.garrison;
+        let full = sim.forts[r[0]].garrison;
+        for _ in 0..24 * 60 {
+            sim.tick();
+        }
+        assert_eq!(sim.forts[r[1]].garrison, garrison, "no one joins a fort that can't feed him");
+        assert!(sim.forts[r[0]].garrison > full, "the well-stocked capital still draws recruits");
+    }
+
+    #[test]
+    fn a_lost_contact_is_not_announced_again_and_again() {
+        let mut sim = Sim::new(SEED);
+        let r = sim.road_forts();
+        sim.armies.retain(|a| a.id == 3 || a.id == 4);
+        let sparrows = sim.army(3).unwrap().pos;
+        let host = sim.armies.iter_mut().find(|a| a.id == 4).unwrap();
+        host.pos = (sparrows.0 + 1, sparrows.1);
+        sim.detect();
+        assert!(sim.knows(Side::East, 3).is_some());
+        let host = sim.armies.iter_mut().find(|a| a.id == 4).unwrap();
+        host.pos = sim.forts[r[5]].pos;
+        host.trail.clear();
+        for _ in 0..12 * 60 {
+            sim.tick();
+        }
+        let news = sim.log.iter().filter(|e| e.text.starts_with("Scouts report Grey Sparrows")).count();
+        assert!(news <= 1, "{news} reports of an army nobody can see");
+    }
+
     #[test]
     fn armies_ordered_to_hold_deploy_into_line() {
         let mut sim = Sim::new(SEED);
+        let r = sim.road_forts();
         sim.armies.retain(|a| a.id == 1);
         sim.armies[0].pos = sim.map.road_cell(0, 120);
         assert_eq!(sim.armies[0].column(&sim.map).len(), 1, "a fresh army is bunched in one cell");
@@ -1224,7 +1441,7 @@ mod tests {
         // 36 companies make 5 cells of line in the open, more where it runs into woods.
         assert!(line.len() >= 5, "1800 men = 36 companies = at least 5 cells of line");
         assert_eq!(line.iter().map(|&(_, n)| n).sum::<u32>(), 36);
-        sim.apply(Side::West, Order::March { army: 1, to: sim.forts[2].pos }).unwrap();
+        sim.apply(Side::West, Order::March { army: 1, to: sim.forts[r[2]].pos }).unwrap();
         for _ in 0..60 {
             sim.tick();
         }
@@ -1357,9 +1574,10 @@ mod tests {
     #[test]
     fn mustering_raises_an_army_from_the_garrison() {
         let mut sim = Sim::new(SEED);
-        let before = sim.forts[0].garrison;
+        let r = sim.road_forts();
+        let before = sim.forts[r[0]].garrison;
         sim.apply(Side::West, Order::Muster { fort: 0, men: 200 }).unwrap();
-        assert_eq!(sim.forts[0].garrison, before - 200);
+        assert_eq!(sim.forts[r[0]].garrison, before - 200);
         let raised = sim.armies.last().unwrap();
         assert_eq!((raised.name.as_str(), raised.men, raised.side), ("Third Banner", 200, Side::West));
         assert!(sim.apply(Side::West, Order::Muster { fort: 5, men: 200 }).is_err(), "not our fort");
@@ -1384,6 +1602,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_valley_is_three_lanes_of_mirrored_holdings() {
+        for seed in 0..40 {
+            let sim = Sim::new(seed);
+            let mirror = MAP_W - 1;
+            for lane in 0..map::LANES {
+                let here: Vec<&Fort> = sim.forts.iter().filter(|f| map::lane(f.pos.1) == lane).collect();
+                assert!(here.iter().any(|f| f.walled()), "seed {seed}: lane {lane} has no fort");
+                if lane != 1 {
+                    assert!(here.iter().any(|f| !f.walled()), "seed {seed}: lane {lane} has no farm");
+                }
+            }
+            for f in &sim.forts {
+                let twin = sim.forts.iter().find(|g| g.pos == (mirror - f.pos.0, f.pos.1));
+                let center = (f.pos.0 - mirror / 2).abs() <= 1;
+                if !center {
+                    let twin = twin.unwrap_or_else(|| panic!("seed {seed}: {} has no twin", f.name));
+                    assert_eq!((twin.kind, twin.garrison, twin.stores), (f.kind, f.garrison, f.stores), "seed {seed}");
+                    assert_eq!(twin.extras, f.extras, "seed {seed}: {} and {}", f.name, twin.name);
+                }
+                assert_eq!(f.walled(), sim.map.terrain(f.pos.0, f.pos.1) == Terrain::Fort, "seed {seed}: {}", f.name);
+                for side in [Side::West, Side::East] {
+                    let home = sim.capital(side).unwrap().pos;
+                    assert!(sim.wagon_route(home, f.pos).is_some(), "seed {seed}: no road to {}", f.name);
+                }
+            }
+            let mut names: Vec<_> = sim.forts.iter().map(|f| f.name).collect();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len(), sim.forts.len(), "seed {seed}: a name is used twice");
+        }
+    }
+
+    #[test]
+    fn crossing_lanes_goes_by_the_bridges() {
+        let sim = Sim::new(SEED);
+        let middle = sim.map.road_cell(0, 60);
+        let below = (60, map::LOWER_ROW);
+        assert_eq!(sim.map.road_distance(middle, (90, middle.1)), 30, "straight down a lane");
+        let across = sim.map.road_distance(middle, below);
+        let bridges = sim.map.roads.iter().filter(|r| {
+            let (x0, x1) = r.x_range();
+            map::lane(r.y_at(x0 as f32) as i32) != map::lane(r.y_at(x1 as f32) as i32)
+        });
+        let nearest = bridges.map(|r| (r.x_range().0 - 60).abs().min((r.x_range().1 - 60).abs())).min().unwrap();
+        assert!(across >= 2 * nearest && across > 6, "over the river by a bridge: {across}");
+    }
+
+    #[test]
+    fn a_farm_is_taken_by_standing_on_it() {
+        let mut sim = Sim::new(SEED);
+        sim.armies.retain(|a| a.id == 3);
+        let farm = sim.forts.iter().find(|f| !f.walled()).unwrap().clone();
+        sim.armies[0].pos = farm.pos;
+        for _ in 0..fort::CAPTURE_MINUTES + 1 {
+            sim.tick();
+        }
+        assert_eq!(sim.forts[farm.id as usize].owner, Some(Side::West));
+        let (left, right) = ((farm.pos.0 - 1, farm.pos.1), (farm.pos.0 + 2, farm.pos.1));
+        assert!(sim.blows_pass(left, right) && sim.blows_pass(farm.pos, (farm.pos.0, farm.pos.1 + 1)), "no walls");
     }
 
     #[test]

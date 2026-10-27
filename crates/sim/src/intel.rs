@@ -291,10 +291,12 @@ impl Sim {
                     },
                 };
                 // Announce new contacts, and old ones found again after being lost a while.
-                let fresh = match prev {
-                    None => true,
-                    Some(p) => p.seen == Seen::Remembered && now - p.minute >= REANNOUNCE_AFTER,
-                };
+                // Only a sighting is news; a memory is not.
+                let fresh = report.seen != Seen::Remembered
+                    && match prev {
+                        None => true,
+                        Some(p) => p.seen == Seen::Remembered && now - p.minute >= REANNOUNCE_AFTER,
+                    };
                 if fresh {
                     let place = self.place_name(report.cell);
                     newly_seen.push(match report.seen {

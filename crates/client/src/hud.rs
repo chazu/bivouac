@@ -1,3 +1,4 @@
+use bivouac_sim::army::{CARRY_DAYS, MILLI};
 use bivouac_sim::clock::{FULL_MOON, hhmm, moon_phase_name};
 use bivouac_sim::path::{FOREST_CAP, MOUNTAIN_CAP};
 use bivouac_sim::{Army, ArmyState, Cell, Convoy, Fort, Leg, MAP_W, Seen, Side, Sim, Terrain};
@@ -71,6 +72,8 @@ fn intro(g: &Grid, l: &Layout, app: &App) {
             ("Armies standing still deploy into line and dig in.", DIM),
             ("Forts are entered only by their gates, where the roads run in; walls count as earthworks.", DIM),
             ("A garrison shuts its gates to you: storm them, and only there can you strike back.", DIM),
+            ("Men carry three days' food. Small parties forage; big hosts need forts or desert.", DIM),
+            ("Three roads run the valley, the river crossed only at bridges. Hold a farm to take it.", DIM),
             ("Your scouts only see so far: dust, campfires and tracks give enemies away.", DIM),
             ("Forests hide small parties. Night, fog and rain shorten everyone's sight.", DIM),
             ("", TEXT),
@@ -251,7 +254,7 @@ fn minimap(g: &Grid, l: &Layout, app: &App, sim: &Sim) {
         g.put(x0 + c, top, '·', rgb(0.25, 0.27, 0.22));
     }
     for f in &sim.forts {
-        g.put(col_of(f.pos.0), top, '■', palette::side_or_stone(f.owner));
+        g.put(col_of(f.pos.0), top, if f.walled() { '■' } else { '▫' }, palette::side_or_stone(f.owner));
     }
     for c in sim.convoys.iter().filter(|c| c.on_the_road() && app.sees_convoy(sim, c)) {
         g.put(col_of(c.pos.0), top, '▪', palette::alpha(palette::side(c.side), 0.7));
@@ -283,14 +286,24 @@ fn minimap(g: &Grid, l: &Layout, app: &App, sim: &Sim) {
         Color::new(1.0, 1.0, 1.0, 0.5),
     );
 
-    let count = |owner: Option<Side>| sim.forts.iter().filter(|f| f.owner == owner).count();
-    let summary = format!(
-        "forts: yours {} · theirs {} · neutral {}",
-        count(Some(app.player)),
-        count(Some(app.player.other())),
-        count(None)
-    );
-    g.text(x0 + w + 3, top, &summary, DIM);
+    let count = |owner: Option<Side>, walled: bool| {
+        sim.forts.iter().filter(|f| f.owner == owner && f.walled() == walled).count()
+    };
+    // Held by you / by them / by no one, each in its owner's color.
+    let mut col = x0 + w + 3;
+    for (label, walled) in [("forts ", true), ("  farms ", false)] {
+        g.text(col, top, label, DIM);
+        col += label.chars().count() as i32;
+        for (k, owner) in [Some(app.player), Some(app.player.other()), None].into_iter().enumerate() {
+            let n = count(owner, walled).to_string();
+            g.text(col, top, &n, palette::side_or_stone(owner));
+            col += n.len() as i32;
+            if k < 2 {
+                g.text(col, top, "/", DIM);
+                col += 1;
+            }
+        }
+    }
     g.text(x0, top + 1, "[←→ / wheel] scroll   [click] jump   [S] sky   [Tab] next army   [C] center", DIM);
 }
 
@@ -539,10 +552,18 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
         (&bar(a.stamina as f32 / 1000.0, 10), stamina_color(a)),
         (&format!(" {}%{}", a.stamina / 10, if a.exhausted() { "  exhausted" } else { "" }), TEXT),
     ]);
-    let per_day = if a.state == ArmyState::Marching { "-1.25/day marching" } else { "-1/day" };
+    // Days of food per day: what the men eat, and what foraging brings in outside the walls.
+    let day = (a.men.max(1) as u64 * MILLI) as f32;
+    let eat = a.ration() as f32 * 24.0 / day;
+    let forage = sim.forage_at(a) as f32 * 24.0 / day;
+    let per_day = match sim.fort_at(a.pos) {
+        Some(f) if f.owner == Some(a.side) => format!("-{eat:.2}/day"),
+        _ if forage > 0.0 => format!("-{eat:.2} +{:.2} forage", forage.min(eat)),
+        _ => format!("-{eat:.2}, land bare"),
+    };
     pen.segs(&[
         ("food     ", DIM),
-        (&bar(a.food_days() / 5.0, 10), if a.food_days() < 1.0 { AMBER } else { TEXT }),
+        (&bar(a.food_days() / CARRY_DAYS as f32, 10), if a.food_days() < 1.0 { AMBER } else { TEXT }),
         (&format!(" {:.1} d  ({per_day})", a.food_days()), TEXT),
     ]);
     pen.segs(&[
@@ -550,7 +571,7 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
         (&bar(a.morale_pct() as f32 / 100.0, 10), morale_color(a)),
         (&format!(" {}%", a.morale_pct()), TEXT),
         (
-            &if sim.fort_at(a.pos).is_some() {
+            &if sim.walls_at(a.pos).is_some() {
                 "   behind walls".to_string()
             } else if a.entrench > 0 {
                 format!("   dug in {}%", a.entrench / 10)
@@ -578,7 +599,7 @@ fn army_detail(pen: &mut Pen, a: &Army, app: &App, sim: &Sim) {
     };
     pen.segs(&[("order    ", DIM), (&order, TEXT)]);
     if a.starving {
-        pen.line("STARVING: stamina is draining", AMBER);
+        pen.line("STARVING: men are deserting", AMBER);
     }
     if a.side == app.player {
         let exposure = match sim.knows(a.side.other(), a.id) {
@@ -604,10 +625,9 @@ fn fort_detail(pen: &mut Pen, f: &Fort, app: &App, sim: &Sim) {
         return;
     }
     pen.segs(&[("SELECTED  ", HEADING), (f.name, palette::side_or_stone(f.owner))]);
-    pen.segs(&[
-        (&format!("{} · {}", f.kind.label(), side_name(f.owner, app.player)), DIM),
-        (&format!("  · garrison {}", f.garrison), DIM),
-    ]);
+    let defended =
+        if f.walled() { format!("  · garrison {}", f.garrison) } else { "  · no walls: hold it to take it".into() };
+    pen.segs(&[(&format!("{} · {}", f.kind.label(), side_name(f.owner, app.player)), DIM), (&defended, DIM)]);
     if f.bars(app.player) {
         pen.line("Gates shut. Storm a gate (only there can you strike the garrison).", DIM);
     }
@@ -653,7 +673,9 @@ fn fort_detail(pen: &mut Pen, f: &Fort, app: &App, sim: &Sim) {
         if !incoming.is_empty() {
             pen.segs(&[("fed by   ", DIM), (&incoming.join(", "), TEXT)]);
         }
-        pen.line(&format!("[M] muster {} men from the garrison", crate::app::MUSTER_MEN.min(f.garrison)), DIM);
+        if f.walled() {
+            pen.line(&format!("[M] muster {} men from the garrison", crate::app::MUSTER_MEN.min(f.garrison)), DIM);
+        }
         let recall = if sim.route_from(f.id).is_some() { "  [X] recall wagons" } else { "" };
         pen.line(&format!("[RMB] another fort: send wagons there{recall}"), DIM);
     }

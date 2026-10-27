@@ -107,7 +107,7 @@ impl Sim {
         let fort = self
             .forts
             .iter()
-            .filter(|f| f.owner == Some(a.side) && !f.contains(a.pos))
+            .filter(|f| f.owner == Some(a.side) && f.walled() && !f.contains(a.pos))
             .min_by_key(|f| (f.pos.0 - a.pos.0).abs());
         if let Some(path) = fort.and_then(|f| self.plan_path(a, f.pos)) {
             return Some(path);
@@ -134,11 +134,11 @@ impl Sim {
         let companies = a.companies();
         let blocked = self.enemy_cells(a.side);
         // A line stays on its own side of any wall.
-        let fort = self.fort_at(a.pos).map(|f| f.id);
+        let fort = self.walls_at(a.pos).map(|f| f.id);
         let ok = |c: Cell| {
             !blocked.contains(&c)
                 && crate::path::enter_cost(&self.map, c, a.men, self.weather).is_some()
-                && self.fort_at(c).map(|f| f.id) == fort
+                && self.walls_at(c).map(|f| f.id) == fort
         };
         // Enough cells to hold everyone; woods hold fewer than open ground.
         let full = |cells: &[Cell]| cells.iter().map(|&c| room(&self.map, c)).sum::<u32>() >= companies;
@@ -152,7 +152,7 @@ impl Sim {
             }
             cells
         };
-        if let Some(f) = self.fort_at(a.pos) {
+        if let Some(f) = self.walls_at(a.pos) {
             // Behind walls, men spread out to man them, nearest first.
             let mut cells: Vec<Cell> = (-1..=1)
                 .flat_map(|dy| (-2..=2).map(move |dx| (f.pos.0 + dx, f.pos.1 + dy)))
@@ -211,7 +211,7 @@ impl Sim {
                     && distance(a.pos, b.pos) <= DEPLOY_ALERT
                     && self.knows(a.side, b.id).is_some_and(|s| s >= Seen::Sighted)
             });
-            let in_fort = self.forts.iter().any(|f| f.contains(a.pos));
+            let in_fort = self.walls_at(a.pos).is_some();
             if a.form_line || threatened || in_fort || self.engaged.contains(&a.id) {
                 let line = self.line_cells(i);
                 let a = &mut self.armies[i];
@@ -467,7 +467,8 @@ impl Sim {
         for (j, a) in self.armies.iter_mut().enumerate() {
             if !engaged[j] {
                 let gain = if a.state == ArmyState::Resting { MORALE_RECOVERY * 2 } else { MORALE_RECOVERY };
-                if a.morale < BASE_MORALE {
+                // Hungry men don't take heart.
+                if a.morale < BASE_MORALE && !a.starving {
                     a.morale = (a.morale + gain).min(BASE_MORALE);
                 }
                 continue;

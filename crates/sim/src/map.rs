@@ -3,7 +3,36 @@ use crate::rng::Rng;
 
 pub const MAP_W: i32 = 240;
 /// Rows of the three-quarter view: row 0 is the far ridge, the last row is nearest.
-pub const MAP_H: i32 = 14;
+pub const MAP_H: i32 = 20;
+
+/// The rows the valley's three lanes run along: the high road under the ridge,
+/// the Imperial Road down the middle, and the river road on the flats beyond.
+pub const UPPER_ROW: i32 = 5;
+pub const MIDDLE_ROW: i32 = 10;
+pub const LOWER_ROW: i32 = 17;
+/// The rows the river winds between.
+pub const RIVER_TOP: i32 = 13;
+pub const RIVER_BOTTOM: i32 = 15;
+pub const LANES: usize = 3;
+
+/// Which lane row `y` lies in: 0 under the ridge, 1 down the middle, 2 beyond
+/// the river.
+pub fn lane(y: i32) -> usize {
+    if y < MIDDLE_ROW - 2 {
+        0
+    } else if y < RIVER_TOP {
+        1
+    } else {
+        2
+    }
+}
+
+/// Where a holding stands, for clearing its ground and raising its walls.
+#[derive(Clone, Copy, Debug)]
+pub struct Site {
+    pub pos: Cell,
+    pub walled: bool,
+}
 
 /// Road heights snap to quarter rows so the line the client draws and the
 /// cells the sim walks are derived from the same numbers.
@@ -197,13 +226,13 @@ impl Map {
     /// ridge down to the river so small parties can cross unseen, and a few glades.
     fn woodland(&mut self, rng: &mut Rng, x0: i32, x1: i32) {
         let open = [Terrain::Field, Terrain::Hill];
-        for _ in 0..rng.range(5, 8) {
-            let c = (rng.range(x0 + 4, x1 - 3), rng.range(3, 10));
+        for _ in 0..rng.range(6, 9) {
+            let c = (rng.range(x0 + 4, x1 - 3), rng.range(3, 13));
             let r = (rng.range(6, 13), rng.range(1, 4));
             self.blob(rng, c, r, Terrain::Forest, &open);
         }
         let mut bx = rng.range(x0 + 6, x1 - 6);
-        for y in 2..10 {
+        for y in 2..RIVER_TOP {
             bx += rng.range(-1, 2);
             for x in bx - rng.range(1, 3)..=bx + rng.range(1, 3) {
                 if self.in_bounds(x, y) && open.contains(&self.terrain(x, y)) {
@@ -212,20 +241,20 @@ impl Map {
             }
         }
         for _ in 0..rng.range(1, 3) {
-            let c = (rng.range(x0 + 4, x1 - 3), rng.range(5, 9));
+            let c = (rng.range(x0 + 4, x1 - 3), rng.range(5, 12));
             let r = (rng.range(2, 4), 0);
             self.blob(rng, c, r, Terrain::Field, &[Terrain::Forest]);
         }
     }
 
-    /// One or two spurs of the ridge reaching down nearly to the river, leaving a
-    /// defile of a row or two plus whatever the roads cut, flanked by foothills.
+    /// Mountain spurs reaching down from the ridge to pinch the valley into a
+    /// defile around the Imperial Road, with rough ground at their feet.
     fn narrows(&mut self, rng: &mut Rng, x0: i32, x1: i32) {
         let spurs = if x1 - x0 >= 34 && rng.chance(1, 2) { 2 } else { 1 };
         for k in 0..spurs {
             let span = (x1 - x0) / spurs;
             let cx = x0 + span * k + rng.range(span / 3, span * 2 / 3 + 1);
-            let bottom = rng.range(7, 9);
+            let bottom = rng.range(MIDDLE_ROW - 1, MIDDLE_ROW + 1);
             let top_half = rng.range(6, 11);
             for y in 0..=bottom {
                 let half = top_half * (bottom - y + 1) / (bottom + 1) + rng.range(0, 2);
@@ -236,8 +265,8 @@ impl Map {
                 }
             }
         }
-        // Foothills skirt the spurs; a few pines cling to them.
-        for y in 0..MAP_H {
+        // Scree and foothills around the spurs.
+        for y in 0..RIVER_TOP {
             for x in x0..=x1 {
                 let rocky = NEIGHBORS.iter().any(|&(dx, dy)| {
                     self.in_bounds(x + dx, y + dy) && self.terrain(x + dx, y + dy) == Terrain::Mountain
@@ -248,19 +277,18 @@ impl Map {
             }
         }
         for _ in 0..rng.range(2, 4) {
-            let c = (rng.range(x0 + 2, x1 - 1), rng.range(4, 9));
+            let c = (rng.range(x0 + 2, x1 - 1), rng.range(4, 12));
             let r = (rng.range(1, 4), 1);
             self.blob(rng, c, r, Terrain::Forest, &[Terrain::Field, Terrain::Hill]);
         }
     }
 
-    /// Rolling hills, some crowned with crags only scouts can climb, and copses
-    /// on their slopes.
     fn highlands(&mut self, rng: &mut Rng, x0: i32, x1: i32) {
-        for _ in 0..rng.range(3, 6) {
-            let (cx, cy) = (rng.range(x0 + 4, x1 - 3), rng.range(4, 9));
+        for _ in 0..rng.range(4, 7) {
+            let (cx, cy) = (rng.range(x0 + 4, x1 - 3), rng.range(4, 12));
             let r = (rng.range(3, 8), rng.range(1, 3));
             self.blob(rng, (cx, cy), r, Terrain::Hill, &[Terrain::Field]);
+            // Crags on the crowns.
             if rng.chance(1, 2) {
                 for x in cx..cx + rng.range(1, 3) {
                     self.set(x, cy, Terrain::Mountain);
@@ -268,17 +296,16 @@ impl Map {
             }
         }
         for _ in 0..rng.range(2, 5) {
-            let c = (rng.range(x0 + 2, x1 - 1), rng.range(4, 10));
+            let c = (rng.range(x0 + 2, x1 - 1), rng.range(4, 13));
             let r = (rng.range(1, 4), rng.range(0, 2));
             self.blob(rng, c, r, Terrain::Forest, &[Terrain::Field, Terrain::Hill]);
         }
     }
 
-    /// Open fields crossed by hedgerows: room for armies, a little cover for
-    /// small parties creeping up on them.
     fn farmland(&mut self, rng: &mut Rng, x0: i32, x1: i32) {
-        for _ in 0..rng.range(3, 6) {
-            let (x, y) = (rng.range(x0, x1 - 4), rng.range(4, 10));
+        // Hedgerows: thin lines of trees along field edges.
+        for _ in 0..rng.range(4, 7) {
+            let (x, y) = (rng.range(x0, x1 - 4), rng.range(4, 13));
             for hx in x..(x + rng.range(3, 9)).min(x1) {
                 if self.terrain(hx, y) == Terrain::Field {
                     self.set(hx, y, Terrain::Forest);
@@ -286,14 +313,50 @@ impl Map {
             }
         }
         for _ in 0..rng.range(1, 3) {
-            let c = (rng.range(x0 + 2, x1 - 1), rng.range(4, 10));
+            let c = (rng.range(x0 + 2, x1 - 1), rng.range(4, 13));
             let r = (rng.range(1, 3), 0);
             self.blob(rng, c, r, Terrain::Forest, &[Terrain::Field]);
         }
         if rng.chance(1, 2) {
-            let c = (rng.range(x0 + 4, x1 - 3), rng.range(4, 9));
+            let c = (rng.range(x0 + 4, x1 - 3), rng.range(4, 12));
             let r = (rng.range(2, 5), 1);
             self.blob(rng, c, r, Terrain::Hill, &[Terrain::Field]);
+        }
+    }
+
+    /// The flats beyond the river, in the same country as the valley above them
+    /// but gentler: copses in the woods, knolls in the hills, hedges on the farms.
+    fn flats(&mut self, rng: &mut Rng, x0: i32, x1: i32, country: Country) {
+        let rows = (RIVER_BOTTOM + 1, MAP_H);
+        let open = [Terrain::Field, Terrain::Hill];
+        match country {
+            Country::Woodland => {
+                for _ in 0..rng.range(2, 5) {
+                    let c = (rng.range(x0 + 3, x1 - 2), rng.range(rows.0 + 1, rows.1));
+                    let r = (rng.range(3, 9), 1);
+                    self.blob(rng, c, r, Terrain::Forest, &open);
+                }
+            }
+            Country::Narrows | Country::Highlands => {
+                for _ in 0..rng.range(2, 4) {
+                    let c = (rng.range(x0 + 3, x1 - 2), rng.range(rows.0 + 1, rows.1));
+                    let r = (rng.range(2, 6), 1);
+                    self.blob(rng, c, r, Terrain::Hill, &[Terrain::Field]);
+                }
+                let c = (rng.range(x0 + 2, x1 - 1), rng.range(rows.0, rows.1));
+                let r = (rng.range(1, 4), 0);
+                self.blob(rng, c, r, Terrain::Forest, &open);
+            }
+            Country::Farmland => {
+                for _ in 0..rng.range(2, 5) {
+                    let (x, y) = (rng.range(x0, x1 - 4), rng.range(rows.0, rows.1));
+                    for hx in x..(x + rng.range(3, 9)).min(x1) {
+                        if self.terrain(hx, y) == Terrain::Field {
+                            self.set(hx, y, Terrain::Forest);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -352,16 +415,56 @@ impl Map {
         })
     }
 
+    /// Roughly how many columns of marching it takes to get from `a` to `b` by road:
+    /// along a lane is straight down it, and between lanes goes by whichever climbs
+    /// and bridges make it shortest.
+    pub fn road_distance(&self, a: Cell, b: Cell) -> i32 {
+        // Junctions where links between lanes meet them: (lane, column) pairs,
+        // two to a link, plus where we start and where we're going.
+        let mut nodes: Vec<(usize, i32)> = vec![(lane(a.1), a.0), (lane(b.1), b.0)];
+        let mut links = Vec::new();
+        for r in &self.roads {
+            let (x0, x1) = r.x_range();
+            let (l0, l1) = (lane(r.y_at(x0 as f32) as i32), lane(r.y_at(x1 as f32) as i32));
+            if l0 != l1 {
+                let rise = (r.y_at(x1 as f32) - r.y_at(x0 as f32)).abs() as i32;
+                links.push((nodes.len(), nodes.len() + 1, (x1 - x0).max(rise)));
+                nodes.push((l0, x0));
+                nodes.push((l1, x1));
+            }
+        }
+        let n = nodes.len();
+        let mut best = vec![i32::MAX; n];
+        let mut done = vec![false; n];
+        best[0] = 0;
+        while let Some(i) = (0..n).filter(|&i| !done[i] && best[i] < i32::MAX).min_by_key(|&i| best[i]) {
+            done[i] = true;
+            if i == 1 {
+                break;
+            }
+            for j in 0..n {
+                let along = (nodes[j].0 == nodes[i].0).then(|| (nodes[j].1 - nodes[i].1).abs());
+                let across = links.iter().find(|&&(p, q, _)| (p, q) == (i, j) || (q, p) == (i, j)).map(|l| l.2);
+                if let Some(d) = [along, across].into_iter().flatten().min() {
+                    best[j] = best[j].min(best[i] + d);
+                }
+            }
+        }
+        best[1]
+    }
+
     /// Topmost road cell in column `x` of road `road`, for placing units on it.
     pub fn road_cell(&self, road: usize, x: i32) -> Cell {
         (x, *self.roads[road].rows_in_column(x).start())
     }
 
     /// Builds a valley: a mountain ridge along the back with foothills at its feet,
-    /// a winding river along the front, forts at `forts` (centers), and `roads` laid
-    /// on top. Each stretch between two forts gets its own country and name: deep
-    /// woods, a mountain pass, hill country or open farmland.
-    pub fn generate(seed: u64, forts: &[Cell], roads: Vec<Road>) -> Map {
+    /// a winding river across the front with flats beyond it, holdings at `sites`,
+    /// and `roads` laid on top. Each stretch between two of the `anchors` (columns
+    /// of the forts on the Imperial Road) gets its own country and name: deep
+    /// woods, a mountain pass, hill country or open farmland. The country mirrors
+    /// about the middle of the valley, so neither side's half is easier going.
+    pub fn generate(seed: u64, sites: &[Site], anchors: &[i32], roads: Vec<Road>) -> Map {
         let (w, h) = (MAP_W, MAP_H);
         let mut rng = Rng::new(seed);
         let mut map = Map {
@@ -373,7 +476,8 @@ impl Map {
             regions: Vec::new(),
         };
 
-        // The far ridge, with a few spurs reaching down into the valley.
+        // The ridge: a ragged wall of mountains along the back rows, with peaks
+        // pushing down here and there and foothills at its foot.
         let mut ridge = 2;
         let mut ridge_at = vec![0; w as usize];
         for x in 0..w {
@@ -398,7 +502,6 @@ impl Map {
             for y in 0..ridge_at[x as usize] {
                 map.set(x, y, Terrain::Mountain);
             }
-            // Foothills gather at the foot of the ridge.
             let foot = ridge_at[x as usize];
             if rng.chance(1, 2) {
                 map.set(x, foot, Terrain::Hill);
@@ -408,26 +511,36 @@ impl Map {
             }
         }
 
-        // Each stretch between forts gets its own character, all four before any repeats.
+        // Countries between the forts on the Imperial Road: each kind once before
+        // any repeats, then mirrored onto the east half.
         let mut deck = [Country::Woodland, Country::Narrows, Country::Highlands, Country::Farmland];
         for k in (1..deck.len()).rev() {
             deck.swap(k, rng.range(0, k as i32 + 1) as usize);
         }
-        let mut xs: Vec<i32> = forts.iter().map(|f| f.0).collect();
+        let mut xs = anchors.to_vec();
         xs.sort();
-        let mut prev = None;
+        let bands = xs.len().saturating_sub(1);
+        let mut countries: Vec<Country> = Vec::new();
+        for k in 0..bands {
+            let mirror = bands - 1 - k;
+            let country = if mirror < k {
+                countries[mirror]
+            } else {
+                match deck.get(k) {
+                    Some(&c) => c,
+                    None => loop {
+                        let c = deck[rng.range(0, deck.len() as i32) as usize];
+                        if Some(&c) != countries.last() {
+                            break c;
+                        }
+                    },
+                }
+            };
+            countries.push(country);
+        }
         for (k, pair) in xs.windows(2).enumerate() {
             let (x0, x1) = (pair[0] + 4, pair[1] - 4);
-            let country = match deck.get(k) {
-                Some(&c) => c,
-                None => loop {
-                    let c = deck[rng.range(0, deck.len() as i32) as usize];
-                    if Some(c) != prev {
-                        break c;
-                    }
-                },
-            };
-            prev = Some(country);
+            let country = countries[k];
             let names = country.names();
             let name = loop {
                 let n = names[rng.range(0, names.len() as i32) as usize];
@@ -442,26 +555,29 @@ impl Map {
                 Country::Highlands => map.highlands(&mut rng, x0, x1),
                 Country::Farmland => map.farmland(&mut rng, x0, x1),
             }
-            // Woods right up against the high road, where raiders can lie in wait.
+            map.flats(&mut rng, x0, x1, country);
+            // Copses within a few rows of the Imperial Road: somewhere to lie in
+            // wait, even out in the open.
             if let Some(high_road) = map.roads.first().cloned() {
                 let copses = if country == Country::Farmland { 1 } else { 2 };
                 for _ in 0..copses {
                     let x = rng.range(x0 + 3, x1 - 2);
                     let row = *high_road.rows_in_column(x).start();
-                    let cy = if rng.chance(1, 2) || row + 2 >= 10 { row - 2 } else { row + 2 };
+                    let cy = if rng.chance(1, 2) { row - 2 } else { row + 2 };
                     let (rx, ry) = (rng.range(2, 6), 1);
                     map.blob(&mut rng, (x, cy), (rx, ry), Terrain::Forest, &[Terrain::Field, Terrain::Hill]);
                 }
             }
         }
 
-        // The river. Where its row changes it widens at the corner, so armies can't
-        // slip diagonally between two water cells.
+        // The river: a gentle meander across the front of the valley, two cells
+        // thick where it bends so it never leaves a diagonal gap.
         let mut prev_y: Option<i32> = None;
         for x in 0..w {
             let xf = x as f32;
-            let y = (11.0 + 1.2 * (xf * 0.07).sin() + 0.5 * (xf * 0.19 + 1.3).sin()).round() as i32;
-            let y = y.clamp(10, 12);
+            let mid = (RIVER_TOP + RIVER_BOTTOM) as f32 / 2.0;
+            let y = (mid + 1.2 * (xf * 0.07).sin() + 0.5 * (xf * 0.19 + 1.3).sin()).round() as i32;
+            let y = y.clamp(RIVER_TOP, RIVER_BOTTOM);
             map.set(x, y, Terrain::River);
             if let Some(py) = prev_y.filter(|&py| py != y) {
                 map.set(x, py, Terrain::River);
@@ -469,23 +585,27 @@ impl Map {
             prev_y = Some(y);
         }
 
-        // Forts sit in cleared ground.
-        for &(fx, fy) in forts {
-            for y in fy - 2..=fy + 2 {
-                for x in fx - 3..=fx + 3 {
+        // Clear ground around each holding; forts get their 5×3 of walls.
+        for site in sites {
+            let (fx, fy) = site.pos;
+            let (rx, ry) = if site.walled { (3, 2) } else { (2, 1) };
+            for y in fy - ry..=fy + ry {
+                for x in fx - rx..=fx + rx {
                     if map.in_bounds(x, y) && map.terrain(x, y) != Terrain::River {
                         map.set(x, y, Terrain::Field);
                     }
                 }
             }
-            for y in fy - 1..=fy + 1 {
-                for x in fx - 2..=fx + 2 {
-                    map.set(x, y, Terrain::Fort);
+            if site.walled {
+                for y in fy - 1..=fy + 1 {
+                    for x in fx - 2..=fx + 2 {
+                        map.set(x, y, Terrain::Fort);
+                    }
                 }
             }
         }
 
-        // Roads cut through forest and over passes; over water they become bridges.
+        // Roads: they clear the way through woods and rock, and bridge the river.
         for r in 0..map.roads.len() {
             let (x0, x1) = map.roads[r].x_range();
             for x in x0..x1 {

@@ -144,19 +144,42 @@ What's on the map: `⣿⣷` is your 1st Army at Greywall Keep. `⣦` is your 2nd
 | Forest | `♣` | 50 min a cell for up to 150 men. Bigger forces get in but crawl: +8 min for each extra 150 men, up to +100 | 20, plus 2 per extra 150 men (up to +25) | Concealment **[decided]**. A forest cell holds only 3 companies, so a big army strings out and its line spreads wide **[built]**. Defenders take 60% damage. |
 | Hill | `∩ ⌒` | 45 min a cell | 18 | High ground: +3 sight (not in fog), and attackers do 80% damage **[built]** |
 | Mountain | `▲` | Parties of 100 men or fewer only, 90 min a cell **[built]** | 35 | A lookout: +5 sight. A cell holds 3 companies, and defenders take 60% damage. Blocks line of sight **[proposed]** |
-| River | `≈` | Impassable except at bridges and fords **[proposed]** | — | |
-| Bridge / ford | `╪` | Chokepoint | — | **[proposed]** |
+| River | `≈` | Impassable except at bridges **[built]** | — | Fords **[proposed]** |
+| Bridge | timber planks | Chokepoint | — | Where the crossings meet the river **[built]** |
 | Fort | `▛▀▜ ▌▓▐ ▙▄▟` | — | Rest and resupply | See §9 |
 
 Rain slows movement on every terrain **[decided]**. Roads turn to mud more slowly than fields **[proposed]**.
 
 **Pace** **[built]**: every army marches at an easy pace (×0.7 speed, half the stamina per cell), a steady one, or a forced march (×1.5 speed, double the stamina per cell). It's set with `P` and shown in the army's status. A forced march over a long distance exhausts the men, and exhausted armies move at half speed, so it pays off only over short stretches. Routing armies run at a steady speed whatever their pace.
 
-### The valley **[built]**
+### Three lanes **[built]**
 
-Each stretch between two forts gets its own **country** and a name. The first four stretches get one of each country, in random order; the fifth gets any country except its neighbor's. Where an army is is reported by stretch ("in the Tiger Hills") and shown in the hover panel.
+Every game generates a new valley, 240 columns by 20 rows:
+
+```
+ rows 0–2    the ridge
+ rows 3–7    UPPER LANE: the High Road (or Ridge Road) under the ridge, row 5
+ rows 8–12   MIDDLE LANE: the Imperial Road, row 10, from capital to capital
+ rows 13–15  the river: crossed only at bridges
+ rows 16–19  LOWER LANE: the River Road on the flats beyond, row 17
+```
+
+- **Roads.** A road runs down each lane through every holding in it. Climbs (Goat Stair, Pilgrim Steps…) join the high road to the Imperial Road, and crossings (Ferry Road, Stone Bridge Road…) bridge the river to the River Road: one of each near each capital and one of each farther out, four per side. The river can only be crossed at their bridges.
+- **Holdings.** Besides the capitals, each half gets:
+  - two walled holdings on the Imperial Road: a mill, then a keep or a village;
+  - one in the upper lane (usually a keep with a watchtower) and one in the lower lane (a mill or a village);
+  - 4–6 farms, at least one in each side lane.
+  - Half the time there's also a keep in the very middle of the valley, up in the upper lane or down on the flats, for both sides to fight over.
+  - Each holding's stores, extras and garrison are rolled within ranges for its kind, and names come from per-kind pools.
+- **Fairness: mirrored pairs.** The west half is generated and mirrored onto the east: same kinds, columns, stores, extras, garrisons and road shapes, with different names. The terrain isn't mirrored, but the kind of country is.
+- **Farms** **[built]**: a farmhouse `⌂` between two strips of crops, three cells along its road. No walls and no garrison: whoever stands on it for an hour holds it. A farm makes 80 grain a day (more with a dairy herd) into a 400-ration granary. Armies refill there like at any friendly holding. Farms send no recruits, but wagons can carry their harvest, and the AI routes each farm's harvest to its nearest fort.
+- **Distances.** The AI measures distance by road: along a lane, and between lanes by the nearest climbs and bridges. Foraging is tracked per lane, so the three lanes are stripped separately.
+
+### Country **[built]**
+
+The stretches between the forts on the Imperial Road get their own **country** and a name. There are five stretches, mirrored: the two at each end match, as do the next two in, so each valley has three different countries in random order. Where an army is is reported by stretch ("in the Tiger Hills") and shown in the hover panel. Each country also shapes the flats beyond the river, more gently: copses in the woods, knolls in the hills, hedges on the farms.
 - **Deep woods** (e.g. "the Old Cedar Deep"): one great wood across most of the valley, a belt of trees running from the ridge to the river so small parties can cross unseen, and a few glades. Armies stay on the road or crawl.
-- **A mountain pass** (e.g. "the Dragon's Teeth"): one or two spurs of the ridge reach down to row 7–8. That leaves a defile a row or two wide above the river, plus wherever a road cuts through. It's a natural place to hold a line. Foothills skirt the spurs, and scouts can climb the spurs to look out.
+- **A mountain pass** (e.g. "the Dragon's Teeth"): one or two spurs of the ridge reach down to the Imperial Road, rows 9–10, cutting the upper lane. That leaves a defile a row or two wide above the river, plus wherever a road cuts through. It's a natural place to hold a line. Foothills skirt the spurs, and scouts can climb the spurs to look out.
 - **Hill country** (e.g. "the Tiger Hills"): rolling hills, some crowned with crags, with copses on their slopes. High ground to fight over.
 - **Open farmland** (e.g. "the Plum Orchards"): open fields crossed by hedgerows. Room for armies to maneuver, with a little cover for raiders creeping up.
 
@@ -215,14 +238,19 @@ Everywhere, foothills gather at the foot of the ridge, and each stretch gets cop
 ## 8. Stamina and movement
 
 - Marching uses stamina. Roads cost little, fields cost more, rain adds to the cost **[decided in principle]**.
-- Resting restores stamina. Resting in a fort is faster **[proposed]**.
+- Resting restores stamina. Resting in a fort is faster **[proposed]**. Starving men rest at half the rate **[built]**.
 - Low stamina means slower marching, worse fighting, and a chance of men straggling (deserting or lagging behind) **[proposed]**.
 - Forced march: an option to move faster at a heavy stamina cost **[proposed]**.
 
 ## 9. Supply (food only for now) **[decided: food only]**
 
-- Every army eats food every tick. Marching eats more than resting **[proposed]**.
-- Armies carry a limited number of days of food. They refill at depots or from supply wagons **[proposed]**.
+- Every army eats food every hour: a ration a man a day, a quarter more on the march and half again at a forced march **[built]**.
+- **Food is the clock [built].** A man carries 3 days' food. A friendly fort tops him up; past that an army lives on what it carries, what it forages, and the forts it takes.
+  - A 2440-man host leaving Lantern Gate with full packs runs out at the Citadel's doorstep (a forced march saves 8 hours but runs out 12 hours sooner). So a rush has to take the forts on the way, or bring stores forward by wagon, or starve while it storms. `cargo test -p bivouac-sim supply_report -- --ignored --nocapture` prints these numbers.
+  - **Starvation:** each hour a starving army loses 1% of its men to desertion and 1% morale, and its morale doesn't recover. It can still march and rests at half the rate, so it can always walk to food. The log warns at a day's food left, at running out, and every 6 hours with the count of deserters.
+  - The defender doesn't have to beat a big host, only outlast its food.
+- **Foraging [built]:** outside friendly walls, an army scrapes up enough to feed 200 men from the land under it, whatever its size. A raiding party lives off the country; a great host barely notices. Each column of the valley holds 400 rations for foragers and regrows 40 a day, so armies that camp or follow one another strip the land bare. The panel shows forage income, or "land bare".
+- Recruits only come to a fort with two days' food in hand for its garrison **[built]**.
 - **Supply wagons** travel the roads from depots to forts or armies on routes the player sets. They can be **intercepted**, which is the main target for small hidden raiding groups **[decided]**. Built so far:
   - **Routes** are standing: select a fort you hold, right-click another, and a train shuttles between them until recalled (`X`). One route leaves each fort; a new order redirects it. Chain forts to move stores up the valley. Fort-to-army routes are **[proposed]**.
   - A train carries up to 1000 rations, leaving the source 3 days of food for its garrison. It loads and unloads for 30 minutes, waits while there's nothing to send, and moves on roads only, slower than an army (20 min a cell, 30 in mud). It can't push past an enemy army.
@@ -231,7 +259,6 @@ Everywhere, foothills gather at the foot of the ridge, and each stretch gets cop
   - If a fort at either end falls, the train turns for whichever end is still held, unloads and disbands.
   - The AI chains routes from its capital through each fort it holds toward the front.
 - `D` detaches a 150-man party (one forest cell's worth, so it moves through woods at full forest speed); shift+`D` divides in half. Detachments keep their parent's morale and stance.
-- Foraging: armies in fields can scrape up a little food, which drains the land **[open]**.
 
 ## 10. Forts
 
@@ -387,9 +414,12 @@ The small picture of the fort is animated in the real window: the mill wheel tur
   - **Counterstroke.** Armies too far away to help strike the enemy capital instead, or the weakest fort the enemy has left behind.
   - **Gather, then strike.** Otherwise all field armies go for the same next fort. If one is too weak alone, it waits and merges with others at the nearest friendly fort.
   - It reckons a walled fort takes 3 men per defender and an open one 2, plus half again any army standing by.
-  - **Feeding.** Hungry armies make for stores they can reach, and anyone passing a stocked fort tops up.
+  - **Feeding (v2).** A fort feeds an army if it holds half a day's stores for it, or a quarter day if the army is already eating there.
+    - Outside such a fort, an army keeps enough food to reach the nearest food it can get, plus half a day. That food is a fort of its own, or a fort it's strong enough to take whose stores would feed it (guessed low when unseen). It keeps its course while the food is still there.
+    - It storms only what it can reach, take (reckoned half a day) and then eat after, at about 64 columns a day.
+    - It gathers only at a fort that can feed the gathering, and anyone passing a stocked fort tops up.
 - Probably layered: front strategy (which forts to attack or defend), army tasks (march, intercept, raid, resupply), and supply management **[proposed]**.
-- Testing: AI-vs-AI games run headless on the deterministic simulation **[proposed]**.
+- Testing: AI-vs-AI games run headless on the deterministic simulation **[built]**: `cargo test -p bivouac-ai duel_report -- --ignored --nocapture` plays 6 seeds for 14 days. On the three-lane valley, with supply as v2 has it, holdings change hands about 24 times a game and 0–650 men per side desert, but neither AI takes the other's capital.
 
 ## 17. Netplay **[decided: plan for it]**
 
@@ -418,7 +448,7 @@ The small picture of the fort is animated in the real window: the mill wheel tur
 Built:
 - A workspace with `sim`, `ai` and `client` crates. The macroquad renderer draws its own glyph grid: braille, block and shade characters are drawn as shapes so they tile seamlessly, and everything else comes from the bundled DejaVu Sans Mono.
 - The sky: day/night gradient, sun, moon with real phases and rise times, blood moon with glow and a red wash over the land, stars, drifting clouds. It collapses to a 2-row strip, and the cells grow to fill the freed space.
-- The map: generated valley (ridge with foothills, a winding river, five named stretches of woods, passes, hills or farmland; see §The valley), 6 forts with gates, 4 spline roads drawn as quantized curves, bridges.
+- The map: a generated three-lane valley (ridge with foothills, a winding river, five named stretches of woods, passes, hills or farmland; see §5), 18–23 holdings mirrored between the halves (forts with gates, and farms), a road down each lane plus 8 climbs and crossings, all spline roads drawn as quantized curves, bridges.
 - Armies: braille density, columns stretching back along their trail, selection, path preview, march/rest/hold/divide/join, stamina, food, resupply in friendly forts, starvation.
 - Forts: stores, daily production from extras, garrison eating, capture by holding for 60 minutes.
 - Weather: clear/overcast/rain/fog as a Markov chain rolled every 3 hours (rain about 7% of the time, a spell every ~3 days); rain slows movement and costs extra stamina; fog and rain overlays.
@@ -435,7 +465,7 @@ Built:
   - A victory/defeat screen with `[N]` for a new game.
   - Mustering 400 men from a fort's garrison (`M`).
   - Daily recruits at held forts: capitals +120, villages +40, others +15.
-  - Capitals produce 2500 grain a day.
+  - Capitals produce 3500 grain a day, enough to feed a side's opening strength at home.
   - The AI musters new cohorts too.
   - `--reveal` lifts the fog for debugging.
 
